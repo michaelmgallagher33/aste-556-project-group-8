@@ -1,0 +1,19 @@
+# Autosave files
+*.asv
+*.m~
+*.autosave
+
+# Simulation and backup files
+*.slx.r*
+*.mdl.r*
+*.bak
+
+# Compiled MEX files and binaries
+*.mex*
+*.p
+
+# Cache and code generation folders
+slprj/
+sccprj/
+codegen/
+*.slxc

@@ -32,6 +32,8 @@ classdef fem
         %     .M       : Global Consistent Mass Matrix (3N x 3N) [kg, kg*m^2]
         %     .mapping : 1xN struct array linking node IDs to global DOF indices
         %                Fields: .node_id, .global_dofs (1x3 array: [x, y, theta])
+        %     .fn      : Natural Frequencies of all system modes (3Nx1)
+        %     .modes   : All system mode shapes (3Nx3N)
         %
         % DEPENDENCIES:
         %   None (Built-in MATLAB functions only)
@@ -149,9 +151,29 @@ classdef fem
             K_global(dofs(3), dofs(3)) = K_global(dofs(3), dofs(3)) + nodes(i).k_rot;
         end
         
+        % 5. Calculate Natural Frequencies and Mode Shapes
+        % Solve the generalized eigenvalue problem K*V = w^2*M*V
+        [V, D] = eig(K_global, M_global);
+
+        % Extract eigenvalues (omega^2)
+        evals = diag(D);
+
+        % Clean up numerical noise for rigid body modes
+        evals(abs(evals) < 1e-10) = 0; 
+
+        % Calculate natural frequencies in Hz
+        omega = sqrt(abs(evals));
+        fn_all = omega / (2 * pi);
+
+        % Sort frequencies and corresponding modes
+        [fn_sorted, sort_idx] = sort(fn_all);
+        modes_sorted = V(:, sort_idx);
+
         % Pack outputs back into the struct
         model.K = K_global;
         model.M = M_global;
+        model.fn = fn_sorted;
+        model.modes = modes_sorted;
     end
     
     % ===============================================================================
@@ -577,6 +599,151 @@ classdef fem
             % Pass the consolidated struct to the generator to map DOFs and output M, K matrices
             combined_model = fem.generate_fem_matrices(combined_model);
         end
-
+        
+            % ===============================================================================
+    
+        function plot_mode_shapes(model, freq_range)
+            % PLOT_MODE_SHAPES Visualizes structural eigenmodes.
+            % Inputs:
+            %   model      : FEM struct with evaluated fn and modes.
+            %   freq_range : (Optional) Single frequency to find the closest match, 
+            %                or [min, max] bound to plot a subset. 
+            
+            if nargin < 2
+                freq_range = [];
+            end
+            
+            fn = model.fn;
+            modes = model.modes;
+            nodes = model.nodes;
+            elements = model.elements;
+            mapping = model.mapping;
+            node_ids = [nodes.id];
+            
+            % Determine which modes to plot based on freq_range
+            if isempty(freq_range)
+                modes_to_plot = 1:length(fn); % Plot all
+            elseif length(freq_range) == 1
+                % Find closest mode
+                [~, min_idx] = min(abs(fn - freq_range));
+                modes_to_plot = min_idx;
+            elseif length(freq_range) == 2
+                % Find modes within bounds
+                modes_to_plot = find(fn >= freq_range(1) & fn <= freq_range(2));
+                if isempty(modes_to_plot)
+                    warning('No modes found in the specified frequency range.');
+                    return;
+                end
+            else
+                error('freq_range must be empty, a scalar, or a 2-element vector.');
+            end
+            
+            % Set colors
+            bg_grey = [0.7 0.7 0.7];
+            moss_green = '#8A9A5B';
+            
+            % Calculate automatic spatial scaling for the mode shape visualizations.
+            % Extract neutral node positions
+            x_vals = [nodes.x];
+            y_vals = [nodes.y];
+            max_dim = max(max(x_vals) - min(x_vals), max(y_vals) - min(y_vals));
+            if max_dim == 0; max_dim = 1; end % Fallback for single node
+            
+            % Limit maximum visual displacement to 15% of the model's max dimension
+            target_disp = 0.15 * max_dim; 
+            
+            % Length of the rotation indicating line (10% of model dim)
+            rot_line_len = 0.10 * max_dim; 
+            
+            % Create figure with a flowing tiled layout
+            figure('Name', 'Mode Shapes', 'Position', [100, 100, 1000, 800]);
+            t = tiledlayout('flow', 'TileSpacing', 'compact', 'Padding', 'compact');
+            
+            for i = 1:length(modes_to_plot)
+                m_idx = modes_to_plot(i);
+                mode_vec = modes(:, m_idx);
+                
+                % Calculate scaling factor for this specific mode
+                % Extract only translational DOFs (x and y) to find max translation
+                trans_dofs = [];
+                for k = 1:length(mapping)
+                    trans_dofs = [trans_dofs, mapping(k).global_dofs(1:2)];
+                end
+                max_trans_val = max(abs(mode_vec(trans_dofs)));
+                
+                if max_trans_val > 1e-12
+                    scale_factor = target_disp / max_trans_val;
+                else
+                    scale_factor = 0; % Prevent division by zero for purely rotational modes
+                end
+                
+                nexttile;
+                hold on; grid on; axis equal;
+                title(sprintf('Mode %d: %.3f Hz', m_idx, fn(m_idx)));
+                
+                % 1. Plot Background (Undeformed) Structure
+                for e = 1:length(elements)
+                    el = elements(e);
+                    n1_idx = find(node_ids == el.nodes(1));
+                    n2_idx = find(node_ids == el.nodes(2));
+                    
+                    plot([nodes(n1_idx).x, nodes(n2_idx).x], ...
+                         [nodes(n1_idx).y, nodes(n2_idx).y], ...
+                         'Color', bg_grey, 'LineWidth', 1);
+                end
+                for n = 1:length(nodes)
+                    scatter(nodes(n).x, nodes(n).y, 20, 'MarkerEdgeColor', bg_grey, 'MarkerFaceColor', bg_grey);
+                end
+                
+                % 2. Plot Deformed Mode Shape
+                % Extract deformed node positions
+                def_x = zeros(1, length(nodes));
+                def_y = zeros(1, length(nodes));
+                def_theta = zeros(1, length(nodes));
+                
+                for n = 1:length(nodes)
+                    dofs = mapping(n).global_dofs;
+                    def_x(n) = nodes(n).x + mode_vec(dofs(1)) * scale_factor;
+                    def_y(n) = nodes(n).y + mode_vec(dofs(2)) * scale_factor;
+                    def_theta(n) = mode_vec(dofs(3)) * scale_factor; 
+                end
+                
+                % Draw deformed elements
+                for e = 1:length(elements)
+                    el = elements(e);
+                    n1_idx = find(node_ids == el.nodes(1));
+                    n2_idx = find(node_ids == el.nodes(2));
+                    
+                    if el.type == "spring"
+                        line_style = '--';
+                    else
+                        line_style = '-';
+                    end
+                    
+                    plot([def_x(n1_idx), def_x(n2_idx)], ...
+                         [def_y(n1_idx), def_y(n2_idx)], ...
+                         line_style, 'Color', moss_green, 'LineWidth', 2);
+                end
+                
+                % Draw deformed nodes (Squares with rotation lines)
+                for n = 1:length(nodes)
+                    % Plot square node
+                    scatter(def_x(n), def_y(n), 40, 's', 'MarkerEdgeColor', moss_green, 'MarkerFaceColor', moss_green);
+                    
+                    % Plot rotation indicator line
+                    theta = def_theta(n);
+                    dx = (rot_line_len/2) * cos(theta);
+                    dy = (rot_line_len/2) * sin(theta);
+                    
+                    plot([def_x(n) - dx, def_x(n) + dx], ...
+                         [def_y(n) - dy, def_y(n) + dy], ...
+                         'k-', 'LineWidth', 1.5);
+                end
+                
+                hold off;
+            end
+        end
+        
     end
+    
 end
