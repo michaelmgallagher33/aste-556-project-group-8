@@ -57,16 +57,14 @@ function struct_out = config_fem_template()
     %  =====================================================================
     %  Each element requires the following fields:
     %  - id          : [String] Unique identifier for the element.
-    %  - type        : [String] Element formulation type. 
-    %                  Currently supported: "beam"
-    %                  Future support   : "spring", "isolator"
+    %  - type        : [String] Element formulation type. ("beam", "spring")
     %  - nodes       : [1x2 String Array] Exact IDs of the connecting nodes.
     %  - E           : [Double] Young's Modulus in Pascals (Pa).
     %  - I           : [Double] Area Moment of Inertia in m^4.
     %  - A           : [Double] Cross-sectional area in m^2.
     %  - rho         : [Double] Mass density per unit length in kg/m.
-    %  - k_discrete  : [Double] Stiffness in N/m (Used for discrete spring 
-    %                  elements, ignored if type == "beam").
+    %  - k_spring    : [1x3 Array] Local stiffness for spring elements [N/m, N/m, N*m/rad].
+    %                  Format: [k_axial, k_shear, k_torsion].
     
     % Element 1: Left Beam
     struct_out.elements(1) = struct(...
@@ -77,7 +75,7 @@ function struct_out = config_fem_template()
         'I', 1e-4, ...
         'A', 0.01, ...
         'rho', 1, ...                        % 1 kg/m
-        'k_discrete', 0);
+        'k_spring', [0, 0, 0]);
     
     % Element 2: Right Beam
     struct_out.elements(2) = struct(...
@@ -88,7 +86,7 @@ function struct_out = config_fem_template()
         'I', 1e-4, ...
         'A', 0.01, ...
         'rho', 2, ...
-        'k_discrete', 0);
+        'k_spring', [0, 0, 0]);
     
     % Element 3: Base Beam
     struct_out.elements(3) = struct(...
@@ -99,7 +97,7 @@ function struct_out = config_fem_template()
         'I', 1e-4, ...
         'A', 0.01, ...
         'rho', 3, ... 
-        'k_discrete', 0);
+        'k_spring', [0, 0, 0];
 
 
 end

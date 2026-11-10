@@ -44,7 +44,6 @@ classdef fem
         num_dofs = num_nodes * 3; % 3 DOFs per node in 2D: [x, y, theta]
         
         % 1. Create DOF Mapping
-        % Creates a registry linking the string IDs to global matrix indices
         node_ids = [nodes.id];
         dof_map = struct('node_id', {}, 'global_dofs', {});
         
@@ -61,22 +60,34 @@ classdef fem
         % 3. Assemble Element Matrices
         for i = 1:length(elements)
             el = elements(i);
-        
-            if el.type == "beam"
-                % Find indices for connecting nodes
-                n1_idx = find(node_ids == el.nodes(1));
-                n2_idx = find(node_ids == el.nodes(2));
-        
-                n1 = nodes(n1_idx);
-                n2 = nodes(n2_idx);
-        
-                % Element Geometry
-                dx = n2.x - n1.x;
-                dy = n2.y - n1.y;
-                L = sqrt(dx^2 + dy^2);
+            
+            % Find indices for connecting nodes
+            n1_idx = find(node_ids == el.nodes(1));
+            n2_idx = find(node_ids == el.nodes(2));
+    
+            n1 = nodes(n1_idx);
+            n2 = nodes(n2_idx);
+    
+            % Element Geometry & Transformation
+            dx = n2.x - n1.x;
+            dy = n2.y - n1.y;
+            L = sqrt(dx^2 + dy^2);
+            
+            if L > 1e-12
                 c = dx / L;
                 s = dy / L;
+            else
+                c = 1; s = 0; % Fallback for coincident nodes if they exist
+            end
+            
+            T = [ c,  s,  0,  0,  0,  0;
+                 -s,  c,  0,  0,  0,  0;
+                  0,  0,  1,  0,  0,  0;
+                  0,  0,  0,  c,  s,  0;
+                  0,  0,  0, -s,  c,  0;
+                  0,  0,  0,  0,  0,  1 ];
         
+            if el.type == "beam"
                 % Local Stiffness Matrix
                 E = el.E; I = el.I; A = el.A;
                 k_local = [ E*A/L, 0,          0,         -E*A/L, 0,          0;
@@ -95,26 +106,34 @@ classdef fem
                     70,  0,      0,       140, 0,      0;
                     0,   54,     13*L,    0,   156,   -22*L;
                     0,  -13*L,  -3*L^2,   0,  -22*L,   4*L^2 ];
-        
-                % Transformation Matrix to Global Coordinates
-                T = [ c,  s,  0,  0,  0,  0;
-                    -s,  c,  0,  0,  0,  0;
-                    0,  0,  1,  0,  0,  0;
-                    0,  0,  0,  c,  s,  0;
-                    0,  0,  0, -s,  c,  0;
-                    0,  0,  0,  0,  0,  1 ];
-        
-                % Transform to Global Frame
-                K_e = T' * k_local * T;
-                M_e = T' * m_local * T;
-        
-                % Identify Global DOFs for Assembly
-                dofs = [dof_map(n1_idx).global_dofs, dof_map(n2_idx).global_dofs];
-        
-                % Add to Global Matrices
-                K_global(dofs, dofs) = K_global(dofs, dofs) + K_e;
-                M_global(dofs, dofs) = M_global(dofs, dofs) + M_e;
+                    
+            elseif el.type == "spring"
+                % Local Stiffness Matrix (Uncoupled Axial, Shear, Torsion)
+                ka = el.k_spring(1);
+                ks = el.k_spring(2);
+                kt = el.k_spring(3);
+                
+                k_local = [ ka,  0,  0, -ka,  0,  0;
+                             0, ks,  0,   0,-ks,  0;
+                             0,  0, kt,   0,  0,-kt;
+                           -ka,  0,  0,  ka,  0,  0;
+                             0,-ks,  0,   0, ks,  0;
+                             0,  0,-kt,   0,  0, kt ];
+                
+                % Springs are considered massless elements
+                m_local = zeros(6,6);
             end
+    
+            % Transform to Global Frame
+            K_e = T' * k_local * T;
+            M_e = T' * m_local * T;
+    
+            % Identify Global DOFs for Assembly
+            dofs = [dof_map(n1_idx).global_dofs, dof_map(n2_idx).global_dofs];
+    
+            % Add to Global Matrices
+            K_global(dofs, dofs) = K_global(dofs, dofs) + K_e;
+            M_global(dofs, dofs) = M_global(dofs, dofs) + M_e;
         end
         
         % 4. Add Nodal Point Masses, Inertias, and Stiffness
@@ -133,9 +152,9 @@ classdef fem
         % Pack outputs back into the struct
         model.K = K_global;
         model.M = M_global;
-        end
-
-        % ===============================================================================
+    end
+    
+    % ===============================================================================
         
         function plot_fem_model(model)
         % PLOT_FEM_MODEL Visualizes the geometry, relative element stiffness,
@@ -164,129 +183,130 @@ classdef fem
             elements = model.elements;
             node_ids = [nodes.id];
             
-            % Define specific colors
-            grey_color = [0.5, 0.5, 0.5];
-            stiffness_color = '#F9BE08';
-            mass_color = '#8A9A5B';
-            royal_blue = '#4169E1'; 
+        % Define specific colors
+        grey_color = [0.5, 0.5, 0.5];
+        stiffness_color = '#F9BE08';
+        mass_color = '#8A9A5B';
+        royal_blue = '#4169E1'; 
+        
+        % Setup Figure
+        figure('Name', 'FEM Struct Visualization', 'Position', [100, 100, 1500, 500]);
+        
+        %% Plot 1: Pure Geometry with Labels
+        subplot(1, 3, 1);
+        hold on; grid on; axis equal;
+        title('Geometry and Mapping');
+        xlabel('X Position (m)'); ylabel('Y Position (m)');
+        
+        % Plot Elements (Grey)
+        for i = 1:length(elements)
+            el = elements(i);
+            n1_idx = find(node_ids == el.nodes(1));
+            n2_idx = find(node_ids == el.nodes(2));
             
-            % Setup Figure
-            figure('Name', 'FEM Struct Visualization', 'Position', [100, 100, 1500, 500]);
+            x = [nodes(n1_idx).x, nodes(n2_idx).x];
+            y = [nodes(n1_idx).y, nodes(n2_idx).y];
             
-            %% Plot 1: Pure Geometry with Labels
-            subplot(1, 3, 1);
-            hold on; grid on; axis equal;
-            title('Geometry and Mapping');
-            xlabel('X Position (m)'); ylabel('Y Position (m)');
+            plot(x, y, '-', 'Color', grey_color, 'LineWidth', 1.5);
             
-            % Plot Elements (Grey)
-            for i = 1:length(elements)
-                el = elements(i);
-                n1_idx = find(node_ids == el.nodes(1));
-                n2_idx = find(node_ids == el.nodes(2));
-                
-                x = [nodes(n1_idx).x, nodes(n2_idx).x];
-                y = [nodes(n1_idx).y, nodes(n2_idx).y];
-                
-                plot(x, y, '-', 'Color', grey_color, 'LineWidth', 1.5);
-                
-                % Label Element at midpoint
-                text(mean(x), mean(y), "  " + el.id, 'Color', grey_color, 'FontSize', 9);
+            % Label Element at midpoint
+            text(mean(x), mean(y), "  " + el.id, 'Color', grey_color, 'FontSize', 9);
+        end
+        
+        % Plot Nodes (Royal Blue) and Label DOFs
+        for i = 1:length(nodes)
+            scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
+            
+            dofs = model.mapping(i).global_dofs;
+            label = sprintf(' %s\n DOFs: [%d, %d, %d]', nodes(i).id, dofs(1), dofs(2), dofs(3));
+            text(nodes(i).x, nodes(i).y, label, 'VerticalAlignment', 'bottom', 'FontSize', 9);
+        end
+        hold off;
+        
+        %% Plot 2: Stiffness Mapping
+        subplot(1, 3, 2);
+        hold on; grid on; axis equal;
+        title('Relative Element Stiffness (Axial)');
+        xlabel('X Position (m)'); ylabel('Y Position (m)');
+        
+        % Calculate stiffness magnitudes (Using Axial Stiffness for visualization)
+        k_mags = zeros(1, length(elements));
+        for i = 1:length(elements)
+            el = elements(i);
+            n1 = nodes(node_ids == el.nodes(1));
+            n2 = nodes(node_ids == el.nodes(2));
+            L = sqrt((n2.x - n1.x)^2 + (n2.y - n1.y)^2);
+            
+            if el.type == "beam"
+                k_mags(i) = (el.E * el.A) / L;
+            elseif el.type == "spring"
+                k_mags(i) = el.k_spring(1); % Using Axial stiffness for plot weight
             end
+        end
+        
+        % Normalize stiffness for line width plotting (range 1 to 5)
+        k_min = min(k_mags); k_max = max(k_mags);
+        if k_max == k_min
+            widths = ones(1, length(elements)) * 3;
+        else
+            widths = 1 + 4 * (k_mags - k_min) / (k_max - k_min);
+        end
+        
+        % Plot elements with varying line widths
+        for i = 1:length(elements)
+            el = elements(i);
+            n1 = nodes(node_ids == el.nodes(1));
+            n2 = nodes(node_ids == el.nodes(2));
             
-            % Plot Nodes (Royal Blue) and Label DOFs
-            for i = 1:length(nodes)
-                scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
-                
-                % Display Node ID and Global DOFs
-                dofs = model.mapping(i).global_dofs;
-                label = sprintf(' %s\n DOFs: [%d, %d, %d]', nodes(i).id, dofs(1), dofs(2), dofs(3));
-                text(nodes(i).x, nodes(i).y, label, 'VerticalAlignment', 'bottom', 'FontSize', 9);
-            end
-            hold off;
-            
-            %% Plot 2: Stiffness Mapping
-            subplot(1, 3, 2);
-            hold on; grid on; axis equal;
-            title('Relative Element Stiffness');
-            xlabel('X Position (m)'); ylabel('Y Position (m)');
-            
-            % Calculate stiffness magnitudes
-            k_mags = zeros(1, length(elements));
-            for i = 1:length(elements)
-                el = elements(i);
-                n1 = nodes(node_ids == el.nodes(1));
-                n2 = nodes(node_ids == el.nodes(2));
-                L = sqrt((n2.x - n1.x)^2 + (n2.y - n1.y)^2);
-                
-                if el.type == "beam"
-                    k_mags(i) = (el.E * el.A) / L;
-                else
-                    k_mags(i) = el.k_discrete;
-                end
-            end
-            
-            % Normalize stiffness for line width plotting (range 1 to 5)
-            k_min = min(k_mags); k_max = max(k_mags);
-            if k_max == k_min
-                widths = ones(1, length(elements)) * 3;
+            if el.type == "spring"
+                % Make springs dashed to differentiate them visually
+                plot([n1.x, n2.x], [n1.y, n2.y], '--', 'Color', stiffness_color, 'LineWidth', widths(i));
             else
-                widths = 1 + 4 * (k_mags - k_min) / (k_max - k_min);
-            end
-            
-            % Plot elements with varying line widths
-            for i = 1:length(elements)
-                el = elements(i);
-                n1 = nodes(node_ids == el.nodes(1));
-                n2 = nodes(node_ids == el.nodes(2));
                 plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', stiffness_color, 'LineWidth', widths(i));
             end
-            
-            % Plot Nodes (Royal Blue)
-            for i = 1:length(nodes)
-                scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
-            end
-            hold off;
-            
-            %% Plot 3: Mass Mapping
-            subplot(1, 3, 3);
-            hold on; grid on; axis equal;
-            title('Relative Nodal Mass & Inertia');
-            xlabel('X Position (m)'); ylabel('Y Position (m)');
-            
-            % Plot faint element lines for context (Light Grey)
-            for i = 1:length(elements)
-                el = elements(i);
-                n1 = nodes(node_ids == el.nodes(1));
-                n2 = nodes(node_ids == el.nodes(2));
-                plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', mass_color);
-            end
-            
-            % Calculate mass + inertia magnitudes for scaling
-            m_mags = arrayfun(@(n) n.mass + n.inertia, nodes);
-            m_min = min(m_mags); m_max = max(m_mags);
-            
-            % Normalize marker size (range 30 to 300)
-            if m_max == m_min
-                sizes = ones(1, length(nodes)) * 100;
-            else
-                sizes = 30 + 270 * (m_mags - m_min) / (m_max - m_min);
-            end
-            
-            % Plot mass bubbles
-            for i = 1:length(nodes)
-                scatter(nodes(i).x, nodes(i).y, sizes(i), 'filled', 'MarkerFaceColor', mass_color, 'MarkerFaceAlpha', 0.6);
-            end
-            
-            % Plot nodes (Royal Blue) overlaid on the mass bubbles to show the exact point
-            for i = 1:length(nodes)
-                scatter(nodes(i).x, nodes(i).y, 30, 'filled', 'MarkerFaceColor', royal_blue);
-                text(nodes(i).x, nodes(i).y, sprintf('  M:%.1f, I:%.1f', nodes(i).mass, nodes(i).inertia), 'FontSize', 8);
-            end
-            hold off;
         end
-
-        % ===============================================================================
+        
+        for i = 1:length(nodes)
+            scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
+        end
+        hold off;
+        
+        %% Plot 3: Mass Mapping
+        subplot(1, 3, 3);
+        hold on; grid on; axis equal;
+        title('Relative Nodal Mass & Inertia');
+        xlabel('X Position (m)'); ylabel('Y Position (m)');
+        
+        % Plot faint element lines for context
+        for i = 1:length(elements)
+            el = elements(i);
+            n1 = nodes(node_ids == el.nodes(1));
+            n2 = nodes(node_ids == el.nodes(2));
+            plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', mass_color);
+        end
+        
+        % Calculate mass + inertia magnitudes for scaling
+        m_mags = arrayfun(@(n) n.mass + n.inertia, nodes);
+        m_min = min(m_mags); m_max = max(m_mags);
+        
+        if m_max == m_min
+            sizes = ones(1, length(nodes)) * 100;
+        else
+            sizes = 30 + 270 * (m_mags - m_min) / (m_max - m_min);
+        end
+        
+        for i = 1:length(nodes)
+            scatter(nodes(i).x, nodes(i).y, sizes(i), 'filled', 'MarkerFaceColor', mass_color, 'MarkerFaceAlpha', 0.6);
+        end
+        
+        for i = 1:length(nodes)
+            scatter(nodes(i).x, nodes(i).y, 30, 'filled', 'MarkerFaceColor', royal_blue);
+            text(nodes(i).x, nodes(i).y, sprintf('  M:%.1f, I:%.1f', nodes(i).mass, nodes(i).inertia), 'FontSize', 8);
+        end
+        hold off;
+    end
+    
+    % ===============================================================================
 
         function [X_rms, X] = calculate_plot_rms(model, options)
             % CALCULATE_PLOT_RMS Simulates transient dynamic response under external
