@@ -600,8 +600,7 @@ classdef fem
             combined_model = fem.generate_fem_matrices(combined_model);
         end
         
-            % ===============================================================================
-    
+        %% =============================================================================== 
         function plot_mode_shapes(model, freq_range)
             % PLOT_MODE_SHAPES Visualizes structural eigenmodes.
             % Inputs:
@@ -743,7 +742,341 @@ classdef fem
                 hold off;
             end
         end
+
+        %% =============================================================================== 
+        function [Fx, Fy, M_theta] = generate_rwa_disturbance(t, rpm_start, rpm_end, unbalance, rotor_inertia)
+            % GENERATE_RWA_DISTURBANCE Generates the time-domain force and torque profiles
+            % for the Reaction Wheel Assembly (RWA) sweeps across all three DOFs.
+            %
+            % SYNTAX:
+            %   [Fx, Fy, M_theta] = generate_rwa_disturbance(t, rpm_start, rpm_end, unbalance, rotor_inertia)
+            %
+            % INPUTS:
+            %   t             - Linearly spaced time vector [s] (e.g., 0:0.01:3600)
+            %   rpm_start     - Starting angular velocity [RPM] (e.g., -5000)
+            %   rpm_end       - Ending angular velocity [RPM] (e.g., 5000)
+            %   unbalance     - Mass unbalance property of the RWA [kgm]
+            %   rotor_inertia - Rotational inertia of the wheel's rotor [kgm^2]
+            %
+            % OUTPUTS:
+            %   Fx      - Force profile in the x-direction [N] (1 x length(t))
+            %   Fy      - Force profile in the y-direction [N] (1 x length(t))
+            %   M_theta - Torque profile in the theta-direction [N*m] (1 x length(t))
+            %
+            % DEPENDENCIES:
+            %   None
+
+            % Normalize time vector to start at 0 for calculations
+            t_sweep = t - t(1);
+            t_total = t_sweep(end);
+
+            % Convert RPM bounds to angular velocity (rad/s)
+            % 1 RPM = 2*pi/60 rad/s = pi/30 rad/s
+            omega_start = rpm_start * (pi / 30);
+            omega_end = rpm_end * (pi / 30);
+
+            % Calculate constant angular acceleration (alpha = dw/dt)
+            alpha = (omega_end - omega_start) / t_total;
+
+            % Instantaneous angular velocity over time
+            omega = omega_start + alpha .* t_sweep;
+
+            % Cumulative rotational phase angle via integration of omega
+            % theta(t) = integral(omega) dt = w0*t + 0.5*alpha*t^2
+            theta_rot = omega_start .* t_sweep + 0.5 * alpha .* (t_sweep.^2);
+
+            % Compute magnitude of the centrifugal force (F = m*r*omega^2)
+            % unbalance is already defined as mass * radius (m*r)
+            force_magnitude = unbalance .* (omega.^2);
+
+            % Resolve force into x and y components
+            Fx = force_magnitude .* cos(theta_rot);
+            Fy = force_magnitude .* sin(theta_rot);
+
+            % Compute the reaction torque on the structure (T_reaction = - I * alpha)
+            % Since alpha is constant for a linear sweep, the torque is constant,
+            % but we map it to the length of the time vector to fit the options struct.
+            % We use positive magnitude here, sign conventions dictate application direction.
+            M_theta = (rotor_inertia * alpha) .* ones(size(t));
+
+
+        end
+
+        %% =============================================================================== 
+        function [error_total, components] = calculate_optical_pointing_error(model, X, optical_nodes)
+            % CALCULATE_OPTICAL_POINTING_ERROR Converts raw global DOF time-history
+            % response into the optical pointing error metric (radians).
+            %
+            % SYNTAX:
+            %   [pointing_error, components] = calculate_optical_pointing_error(model, X, optical_nodes)
+            %
+            % INPUTS:
+            %   model         - Struct containing assembled system matrices and mapping:
+            %                   .mapping : DOF mapping struct array linking node IDs
+            %                              to global matrix indices [x, y, theta].
+            %   X             - Time-history displacement matrix (n_dof x length(t))
+            %                   outputted by the dynamic simulation.
+            %   optical_nodes - Struct defining the relevant optical node IDs:
+            %                   .sm_id  : String ID of the Secondary Mirror node
+            %                   .pm_ids : 1D Cell Array of String IDs for Primary Mirror nodes
+            %
+            % OUTPUTS:
+            %   pointing_error - Maximum total pointing error over time across all PM paths (1 x length(t))
+            %   components     - Struct containing the individual pointing errors:
+            %                    .sm    : Error contribution from the SM (1 x length(t))
+            %                    .pms   : Error contributions from each PM (num_pms x length(t))
+            %                    .total : Total error for each PM/SM path (num_pms x length(t))
+            %
+            % DEPENDENCIES:
+            %   None
+
+            % Extract the mapping dictionary
+            mapping = model.mapping;
+
+            % Nested helper function to find index safely
+            function idx = get_theta_idx(target_id)
+                all_ids = string({mapping.node_id});
+                target_str = string(target_id);
+
+                is_match = strcmp(all_ids, target_str);
+
+                if ~any(is_match)
+                    error('OpticalNode:NotFound', ...
+                        'The optical node "%s" was not found in the model mapping. Please check for typos.', target_str);
+                end
+
+                % Assuming node IDs are unique, grab the first match
+                matched_node = mapping(is_match);
+                idx = matched_node(1).global_dofs(3); % 3rd DOF is theta
+            end
+
+            %% 1. Secondary Mirror (SM) Contribution
+            % Sensitivity: 2 * compression_ratio = 2 * 8.5 = 17
+            sm_idx = get_theta_idx(optical_nodes.sm_id);
+            theta_sm = X(sm_idx, :);
+            error_sm = 17 * theta_sm;
+
+            %% 2. Primary Mirror (PM) Contributions
+            num_pms = length(optical_nodes.pm_ids);
+            num_time_steps = size(X, 2);
+
+            theta_pms = zeros(num_pms, num_time_steps);
+            error_pms = zeros(num_pms, num_time_steps);
+            error_total = zeros(num_pms, num_time_steps);
+
+            % Sensitivity: 2
+            for i = 1:num_pms
+                pm_idx = get_theta_idx(optical_nodes.pm_ids{i});
+                theta_pms(i, :) = X(pm_idx, :);
+                error_pms(i, :) = 2 * theta_pms(i, :);
+
+                % Superimpose with SM error (worst case absolute summation)
+                error_total(i, :) = abs(error_pms(i, :)) + abs(error_sm);
+            end
+
+            % Pack granular data into the components struct for detailed debugging
+            components.sm = error_sm;
+            components.pms = error_pms;
+            components.total = error_total;
+
+
+        end
+
+        %% =============================================================================== 
+        function [A, B, C, D] = build_state_space(model, options, optical_nodes, zeta)
+        % BUILD_STATE_SPACE Constructs the continuous-time state-space matrices
+        % (A, B, C, D) tailored for calculating optical pointing error.
+        %
+        % SYNTAX:
+        %   [A, B, C, D] = build_state_space(model, options, optical_nodes, zeta)
+        %
+        % INPUTS:
+        %   model         - System model struct (must contain .M, .K, .mapping, .fn)
+        %   options       - Dynamic simulation setup struct (must contain .forces)
+        %                   Forces fields: .node_id (String), .dof ("x", "y", or "theta")
+        %   optical_nodes - Struct defining mirrors (for C matrix)
+        %                   Fields: .sm_id (String), .pm_ids (Cell array of Strings)
+        %   zeta          - Damping ratio (e.g., 0.01 for 1%)
+        %
+        % OUTPUTS:
+        %   A, B, C, D    - State-space matrices for the continuous-time system
         
+        % Total number of degrees of freedom
+        n = size(model.M, 1);
+        
+        % --- 1. Construct A Matrix (System Dynamics) ---
+        % Calculate Rayleigh Proportional Damping: C = alpha*M + beta*K
+        % Using the first two natural frequencies to solve for alpha and beta
+        w1 = model.fn(1) * 2 * pi;
+        w2 = model.fn(2) * 2 * pi;
+        
+        % Setup system of equations for damping coefficients
+        % [ 1/(2*w1), w1/2 ] [alpha] = [zeta]
+        % [ 1/(2*w2), w2/2 ] [beta ]   [zeta]
+        W = [1/(2*w1), w1/2; 
+             1/(2*w2), w2/2];
+        ab = W \ [zeta; zeta];
+        alpha = ab(1);
+        beta = ab(2);
+        
+        C_damp = alpha * model.M + beta * model.K;
+        
+        % State vector: X = [displacement; velocity]
+        % A = [ 0, I ; -M\K, -M\C_damp ]
+        A = [zeros(n, n), eye(n);
+             -model.M \ model.K, -model.M \ C_damp];
+             
+        % --- 2. Construct B Matrix (Input Mapping) ---
+        % Extract the forces array from the options struct
+        if isfield(options, 'forces')
+            forces_array = options.forces;
+        else
+            forces_array = options; % Fallback in case options.forces was passed directly
+        end
+        
+        num_inputs = length(forces_array);
+        B_top = zeros(n, num_inputs); % Forces don't directly affect velocity states
+        B_bottom = zeros(n, num_inputs);
+        
+        % Robustly cast all mapping IDs to strings and trim whitespace
+        map_ids = strtrim(string({model.mapping.node_id}));
+        
+        for i = 1:num_inputs
+            target_id = strtrim(string(forces_array(i).node_id));
+            dof_type = lower(strtrim(string(forces_array(i).dof)));
+            
+            idx = find(strcmp(map_ids, target_id));
+            
+            if isempty(idx)
+                error('Force node "%s" not found in model mapping.', target_id);
+            end
+            
+            % Determine which specific DOF (1=x, 2=y, 3=theta) to apply force to
+            if strcmp(dof_type, "x")
+                dof_idx = model.mapping(idx).global_dofs(1);
+            elseif strcmp(dof_type, "y")
+                dof_idx = model.mapping(idx).global_dofs(2);
+            elseif strcmp(dof_type, "theta")
+                dof_idx = model.mapping(idx).global_dofs(3);
+            else
+                error('Invalid DOF "%s" for force node "%s". Use "x", "y", or "theta".', dof_type, target_id);
+            end
+            
+            % Apply the force mapping (F = M*a -> a = M\F)
+            % We place a 1 in the corresponding input column/DOF row
+            F_vec = zeros(n, 1);
+            F_vec(dof_idx) = 1;
+            B_bottom(:, i) = model.M \ F_vec;
+        end
+        
+        B = [B_top; B_bottom];
+        
+        % --- 3. Construct C Matrix (Output Mapping) ---
+        % We want a single output row representing total optical pointing error
+        % The output depends on displacements, not velocities
+        C_disp = zeros(1, n);
+        
+        % Helper nested function to safely get the theta index
+        function t_idx = get_theta(node_string)
+            target = strtrim(string(node_string));
+            node_idx = find(strcmp(map_ids, target));
+            if isempty(node_idx)
+                error('Optical node "%s" not found in model mapping.', target);
+            end
+            t_idx = model.mapping(node_idx).global_dofs(3);
+        end
+        
+        % Secondary Mirror Contribution (2 * 8.5 * theta_sm)
+        sm_dof = get_theta(optical_nodes.sm_id);
+        C_disp(sm_dof) = 2 * 8.5;
+        
+        % Primary Mirror Contributions (-2 * theta_pm)
+        % (Using negative to represent relative rotation error)
+        for i = 1:length(optical_nodes.pm_ids)
+            pm_dof = get_theta(optical_nodes.pm_ids{i});
+            C_disp(pm_dof) = -2;
+        end
+        
+        % C matrix maps state vector [displacement; velocity] to output
+        C = [C_disp, zeros(1, n)];
+        
+        % --- 4. Construct D Matrix (Direct Feedthrough) ---
+        D = zeros(1, num_inputs);
+        
+        
+        end
+
+        %% =============================================================================== 
+        function rms_error = compute_psd_rms(A, B, C, D, f_range, input_idx)
+            % COMPUTE_PSD_RMS Integrates a noise Power Spectral Density (PSD) profile
+            % over a frequency range using the system's transfer function to find
+            % the 1-sigma RMS pointing error.
+            %
+            % SYNTAX:
+            %   rms_error = compute_psd_rms(A, B, C, D, f_range)
+            %   rms_error = compute_psd_rms(A, B, C, D, f_range, input_idx)
+            %
+            % INPUTS:
+            %   A, B, C, D - State-space matrices for the continuous-time system.
+            %   f_range    - Frequency vector in Hz (e.g., linspace(10, 100, 1000)).
+            %   input_idx  - (Optional) Scalar index specifying which input column of B and D
+            %                corresponds to the SM motor disturbance. Defaults to 1.
+            %
+            % OUTPUTS:
+            %   rms_error  - Scalar double representing the 1-sigma RMS pointing error.
+            %
+            % DEPENDENCIES:
+            %   Control System Toolbox (ss, freqresp)
+
+            % Default to the first input if no index is provided
+            if nargin < 6
+                input_idx = 1;
+            end
+
+            % Validate input sizes and force Single-Input Single-Output (SISO) system
+            if size(B, 2) > 1
+                warning('Multiple inputs detected in B matrix. Automatically slicing to use input index %d.', input_idx);
+                B = B(:, input_idx);
+                D = D(:, input_idx);
+            end
+
+            if size(C, 1) > 1
+                error('Multiple outputs detected in C matrix. The system must have a single output for pointing error.');
+            end
+
+            % Construct the continuous-time state-space model
+            sys = ss(A, B, C, D);
+
+            % Convert frequency range from Hz to angular frequency (rad/s)
+            % freqresp requires frequencies in rad/s
+            w_range = 2 * pi * f_range;
+
+            % Evaluate the complex frequency response H(jw) of the system
+            % squeeze() removes singleton dimensions to return a 1D array of complex numbers
+            H_complex = squeeze(freqresp(sys, w_range));
+
+            % Ensure both the frequency vector and the response are the exact same shape (column vectors)
+            % This prevents orientation mismatch errors in trapz or element-wise math
+            f_range_col = f_range(:);
+            H_complex_col = H_complex(:);
+
+            % Define the Motor Noise PSD profile: S_xx = 0.01 / f
+            % Units: (N*m)^2 / Hz
+            S_xx = 0.01 ./ f_range_col;
+
+            % Compute the output PSD profile G_yy(f) = |H(f)|^2 * S_xx(f)
+            % The transfer function maps input torque to output pointing error
+            G_yy = (abs(H_complex_col).^2) .* S_xx;
+
+            % Integrate the output PSD over the frequency range (in Hz)
+            % using the trapezoidal rule to find the variance (sigma^2)
+            variance = trapz(f_range_col, G_yy);
+
+            % The RMS error (1-sigma) is the square root of the variance
+            rms_error = sqrt(variance);
+
+
+        end
     end
     
 end
