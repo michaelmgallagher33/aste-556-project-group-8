@@ -25,12 +25,21 @@ function struct_out = config_bus()
     %                  singular matrices on pin joints).
     
     % Nodes: Bus
-    m_bus_node = 50; I_bus_node = 100;
+    %  Bus Total Target Mass: ~3000 kg. 
+    %  The mass is distributed between the node point masses and the beam elements.
+    %  Using 350 kg per bus node (1400 kg total) + structural beam mass (~1620 kg).
+    m_bus_node = 350; I_bus_node = 200;
+    % Calculate realistic ADCS stiffness, use estimated value
+    I_total = 25000; 
+    % Set target ADCS bandwidth (Hz)
+    f_acs = 0.05; 
+    % Calculate required rotational stiffness (N*m/rad)
+    k_rot_adcs = (2 * pi * f_acs)^2 * I_total;
     struct_out.nodes(1) = struct(...
         'id', "Bus Bottom Left", ...
         'x', -3, 'y', 0, ...
         'mass', m_bus_node, 'inertia', I_bus_node, ...
-        'constraints', [0, 0, 0], 'k_rot', 0); 
+        'constraints', [1, 1, 0], 'k_rot', k_rot_adcs); 
     struct_out.nodes(2) = struct(...
         'id', "Bus Top Left", ...
         'x', -3, 'y', 3, ...
@@ -48,7 +57,9 @@ function struct_out = config_bus()
         'constraints', [0, 0, 0], 'k_rot', 0); 
     
     % Nodes: Reaction Wheel Assemblies (RWAs)
-    m_rwa_node = 10; I_rwa_node = 5;
+    % A typical large RWA weighs around 15 kg with low rotational inertia 
+    % relative to the bus.
+    m_rwa_node = 15; I_rwa_node = 0.5 * 15 * 0.2^2; % (Shape Factor) x (Mass) x (Radius)^2
     struct_out.nodes(5) = struct(...
         'id', "RWA Left", ...
         'x', -2, 'y', 1, ...
@@ -60,8 +71,11 @@ function struct_out = config_bus()
         'mass', m_rwa_node, 'inertia', I_rwa_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0);
     
-    % Nodes: Solar Array Wing Assemblys (SAWAs)
-    m_sawa_node = 2; I_sawa_node = 1;
+    % Nodes: Solar Array Wing Assemblies (SAWAs)
+    % Solar arrays have distributed mass but represent a significant portion
+    % of the vehicle mass (e.g., 50 kg per wing distributed across two nodes).
+    % They have high rotational inertia due to their extended panel shapes.
+    m_sawa_node = 25; I_sawa_node = 15;
     struct_out.nodes(7) = struct(...
         'id', "SAWA Left Mid", ...
         'x', -5.5, 'y', 0, ...
@@ -100,7 +114,11 @@ function struct_out = config_bus()
     %                  Format: [k_axial, k_shear, k_torsion].
     
     % Elements: Bus
-    E_bus = 70e9; I_bus = 2.25; A_bus = 2*.01; rho_bus = 2700;
+    % Made highly rigid. Modeled loosely as thick Aluminum (E = 70 GPa).
+    % I = 0.1 m^4 and A = 0.05 m^2 represent a stiff, heavy cross-section 
+    % (e.g., a heavily reinforced truss or thick-walled box structure).
+    % rho_bus = Area * 2700 kg/m^3 (Al density) = 135 kg/m.
+    E_bus = 70e9; I_bus = 0.1; A_bus = 0.05; rho_bus = 135;
     struct_out.elements(1) = struct(...
         'id', "Bus Base", 'type', "beam", ...
         'nodes', ["Bus Bottom Left", "Bus Bottom Right"], ... 
@@ -122,12 +140,15 @@ function struct_out = config_bus()
         'E', E_bus, 'I', I_bus, 'A', A_bus, ...
         'rho', rho_bus, 'k_spring', [0, 0, 0]);
 
-    % Elements: Reaction Wheel Assembly supports
-    E_rwa = 70e9; I_rwa = 0.01; A_rwa = 0.01; rho_rwa = 2700;
-    f_n = 10; % System Goal Natural frequency (Hz)
-    % Set RWA support stiffness from the target natural frequency
-    k_rwa = (2*pi*f_n)^2 * m_rwa_node;
-    k_rwa_support = [k_rwa, k_rwa, k_rwa];
+    % Elements: Reaction Wheel Assembly Isolators
+    % RWAs are mounted on vibration isolators to prevent high-frequency jitter 
+    % from entering the bus. We model these as springs targeting a ~20 Hz 
+    % isolation frequency.
+    E_rwa = 0; I_rwa = 0; A_rwa = 0; rho_rwa = 0; % Spring element ignores these
+    f_n = 20; % Target natural isolation frequency (Hz)
+    k_rwa = (2*pi*f_n)^2 * m_rwa_node; % Stiffness in N/m
+    k_rwa_rot = 1000; % Soft rotational stiffness in N*m/rad
+    k_rwa_support = [k_rwa, k_rwa, k_rwa_rot];
     struct_out.elements(5) = struct( ...
         'id', "RWA Left Support", 'type', "spring", ...
         'nodes', ["Bus Bottom Left", "RWA Left"], ...
@@ -140,7 +161,11 @@ function struct_out = config_bus()
         'rho', rho_rwa, 'k_spring', k_rwa_support);
 
     % Elements: SAWA Structures
-    E_sawa = 70e9; I_sawa = 0.01; A_sawa = 0.01; rho_sawa = 2700;
+    % Solar arrays are significantly less rigid than the bus. 
+    % We use Aluminum (E=70e9) but drop the Area and Area Moment of Inertia 
+    % dramatically to represent flat composite panels.
+    % rho_sawa = Area * 2700 kg/m^3 = 2.7 kg/m.
+    E_sawa = 70e9; I_sawa = 1e-4; A_sawa = 1e-3; rho_sawa = 2.7;
     struct_out.elements(7) = struct( ...
         'id', "SAWA Left Inner", 'type', "beam", ...
         'nodes', ["Bus Bottom Left", "SAWA Left Mid"], ...

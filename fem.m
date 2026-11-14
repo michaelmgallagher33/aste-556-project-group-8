@@ -152,23 +152,17 @@ classdef fem
         end
         
         % 5. Calculate Natural Frequencies and Mode Shapes
-        % Solve the generalized eigenvalue problem K*V = w^2*M*V
         [V, D] = eig(K_global, M_global);
-
-        % Extract eigenvalues (omega^2)
+    
         evals = diag(D);
-
-        % Clean up numerical noise for rigid body modes
         evals(abs(evals) < 1e-10) = 0; 
-
-        % Calculate natural frequencies in Hz
+    
         omega = sqrt(abs(evals));
         fn_all = omega / (2 * pi);
-
-        % Sort frequencies and corresponding modes
+    
         [fn_sorted, sort_idx] = sort(fn_all);
         modes_sorted = V(:, sort_idx);
-
+    
         % Pack outputs back into the struct
         model.K = K_global;
         model.M = M_global;
@@ -204,14 +198,12 @@ classdef fem
             nodes = model.nodes;
             elements = model.elements;
             node_ids = [nodes.id];
-            
-        % Define specific colors
+        
         grey_color = [0.5, 0.5, 0.5];
         stiffness_color = '#F9BE08';
         mass_color = '#8A9A5B';
         royal_blue = '#4169E1'; 
         
-        % Setup Figure
         figure('Name', 'FEM Struct Visualization', 'Position', [100, 100, 1500, 500]);
         
         %% Plot 1: Pure Geometry with Labels
@@ -220,7 +212,6 @@ classdef fem
         title('Geometry and Mapping');
         xlabel('X Position (m)'); ylabel('Y Position (m)');
         
-        % Plot Elements (Grey)
         for i = 1:length(elements)
             el = elements(i);
             n1_idx = find(node_ids == el.nodes(1));
@@ -230,12 +221,9 @@ classdef fem
             y = [nodes(n1_idx).y, nodes(n2_idx).y];
             
             plot(x, y, '-', 'Color', grey_color, 'LineWidth', 1.5);
-            
-            % Label Element at midpoint
             text(mean(x), mean(y), "  " + el.id, 'Color', grey_color, 'FontSize', 9);
         end
         
-        % Plot Nodes (Royal Blue) and Label DOFs
         for i = 1:length(nodes)
             scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
             
@@ -251,7 +239,6 @@ classdef fem
         title('Relative Element Stiffness (Axial)');
         xlabel('X Position (m)'); ylabel('Y Position (m)');
         
-        % Calculate stiffness magnitudes (Using Axial Stiffness for visualization)
         k_mags = zeros(1, length(elements));
         for i = 1:length(elements)
             el = elements(i);
@@ -262,11 +249,10 @@ classdef fem
             if el.type == "beam"
                 k_mags(i) = (el.E * el.A) / L;
             elseif el.type == "spring"
-                k_mags(i) = el.k_spring(1); % Using Axial stiffness for plot weight
+                k_mags(i) = el.k_spring(1);
             end
         end
         
-        % Normalize stiffness for line width plotting (range 1 to 5)
         k_min = min(k_mags); k_max = max(k_mags);
         if k_max == k_min
             widths = ones(1, length(elements)) * 3;
@@ -274,14 +260,12 @@ classdef fem
             widths = 1 + 4 * (k_mags - k_min) / (k_max - k_min);
         end
         
-        % Plot elements with varying line widths
         for i = 1:length(elements)
             el = elements(i);
             n1 = nodes(node_ids == el.nodes(1));
             n2 = nodes(node_ids == el.nodes(2));
             
             if el.type == "spring"
-                % Make springs dashed to differentiate them visually
                 plot([n1.x, n2.x], [n1.y, n2.y], '--', 'Color', stiffness_color, 'LineWidth', widths(i));
             else
                 plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', stiffness_color, 'LineWidth', widths(i));
@@ -299,7 +283,6 @@ classdef fem
         title('Relative Nodal Mass & Inertia');
         xlabel('X Position (m)'); ylabel('Y Position (m)');
         
-        % Plot faint element lines for context
         for i = 1:length(elements)
             el = elements(i);
             n1 = nodes(node_ids == el.nodes(1));
@@ -307,7 +290,6 @@ classdef fem
             plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', mass_color);
         end
         
-        % Calculate mass + inertia magnitudes for scaling
         m_mags = arrayfun(@(n) n.mass + n.inertia, nodes);
         m_min = min(m_mags); m_max = max(m_mags);
         
@@ -330,7 +312,7 @@ classdef fem
     
     % ===============================================================================
 
-        function [X_rms, X] = calculate_plot_rms(model, options)
+        function [X_rms, X] = calculate_rms(model, options)
             % CALCULATE_PLOT_RMS Simulates transient dynamic response under external
             % perturbing forces using state-space representation and plots RMS metrics.
             %
@@ -361,26 +343,24 @@ classdef fem
             M = model.M;
             K = model.K;
             mapping = model.mapping;
-            
+
             t = options.t;
             z = options.z;
             n_dof = size(M, 1);
-            
-            % Build Force Matrix from options
+
+            % Build Force Matrix
             F_matrix = zeros(n_dof, length(t));
             if isfield(options, 'forces')
                 for i = 1:length(options.forces)
                     f = options.forces(i);
-                    
-                    % Find the global dofs for this node
+
                     node_idx = find([mapping.node_id] == f.node_id);
                     if isempty(node_idx)
                         error('Node ID %s not found in mapping.', f.node_id);
                     end
-                    
+
                     node_dofs = mapping(node_idx).global_dofs;
-                    
-                    % Map to the specific directional DOF
+
                     if strcmpi(f.dof, 'x')
                         g_dof = node_dofs(1);
                     elseif strcmpi(f.dof, 'y')
@@ -390,13 +370,85 @@ classdef fem
                     else
                         error('Invalid DOF type. Use ''x'', ''y'', or ''theta''.');
                     end
-                    
-                    % Add force profile (allows superposition if multiple forces hit one DOF)
+
                     F_matrix(g_dof, :) = F_matrix(g_dof, :) + f.profile;
                 end
             end
+
+            % Proportional Rayleigh Damping matrix
+            % Filter out rigid body modes (< 1e-4 Hz) to avoid singularity
+            flex_modes = model.fn(model.fn > 1e-4);
+            if length(flex_modes) < 2
+                % Fallback if strictly rigid
+                beta = 0; alpha = 0; 
+            else
+                w1 = flex_modes(1) * 2 * pi;
+                w2 = flex_modes(2) * 2 * pi;
+                W = [1/(2*w1), w1/2; 1/(2*w2), w2/2];
+                ab = W \ [z; z];
+                alpha = ab(1);
+                beta = ab(2);
+            end
+            C = alpha * M + beta * K; 
+
+            % Convert to State-Space Formulation
+            A = [zeros(n_dof), eye(n_dof);
+                -M\K, -M\C];
+            B = [zeros(n_dof);
+                M\eye(n_dof)];
+            C_ss = [eye(n_dof), zeros(n_dof)]; 
+            D_ss = zeros(n_dof);
+
+            sys = ss(A, B, C_ss, D_ss);
+
+            % Simulate response
+            X = lsim(sys, F_matrix', t)'; 
+
+            % Calculate RMS response
+            X_rms = sqrt(mean(X.^2, 2));
+        end
+
+        % ===============================================================================
+
+        function plot_rms(model, options, X, X_rms, plot_ids)
+            % PLOT_RMS Plots dynamic time-history displacement profiles categorized
+            % separately by degree of freedom (X, Y, Theta), along with an RMS bar chart.
+            %
+            % SYNTAX:
+            %   fem.plot_rms(model, options, X, X_rms)
+            %   fem.plot_rms(model, options, X, X_rms, plot_ids)
+            %
+            % INPUTS:
+            %   model    - Struct containing .mapping
+            %   options  - Struct containing .t (time vector)
+            %   X        - Time-history displacement matrix (n_dof x length(t)) from calculate_rms
+            %   X_rms    - RMS response vector (n_dof x 1) from calculate_rms
+            %   plot_ids - (Optional) Cell array or string array of node IDs to isolate in the plots.
+            %
+            % OUTPUTS:
+            %   Generates a figure window containing 4 subplots:
+            %     1. X-Translation Time History
+            %     2. Y-Translation Time History
+            %     3. Theta-Rotation Time History
+            %     4. Combined RMS Displacement Bar Chart
+
+            if nargin < 5 || isempty(plot_ids)
+                filter_nodes = false;
+            else
+                filter_nodes = true;
+                plot_ids = string(plot_ids);
+            end
+    
+            mapping = model.mapping;
+            t = options.t;
+            n_dof = size(X, 1);
             
-            % Generate labels for plotting using the mapping
+            % Extract DOFs categorized by direction
+            x_dofs = arrayfun(@(m) m.global_dofs(1), mapping);
+            y_dofs = arrayfun(@(m) m.global_dofs(2), mapping);
+            theta_dofs = arrayfun(@(m) m.global_dofs(3), mapping);
+            
+            % Generate labels
             dof_labels = strings(n_dof, 1);
             for i = 1:length(mapping)
                 dof_labels(mapping(i).global_dofs(1)) = mapping(i).node_id + " (X)";
@@ -404,64 +456,93 @@ classdef fem
                 dof_labels(mapping(i).global_dofs(3)) = mapping(i).node_id + " (\theta)";
             end
             
-            % Calculate proportional Rayleigh Damping matrix (C = alpha*M + beta*K)
-            [~, D] = eig(K, M);
-            omega = sqrt(max(diag(D))); % approximate fundamental omega
-            beta = 2 * z / omega;
-            C = beta * K; 
+            colors = lines(length(mapping));
             
-            % Convert to State-Space Formulation
-            A = [zeros(n_dof), eye(n_dof);
-                 -M\K, -M\C];
-            B = [zeros(n_dof);
-                 M\eye(n_dof)];
-            C_ss = [eye(n_dof), zeros(n_dof)]; 
-            D_ss = zeros(n_dof);
+            figure('Name', 'Dynamic Response Analysis', 'Position', [100, 100, 1200, 900]);
             
-            % Create State-Space model
-            sys = ss(A, B, C_ss, D_ss);
-            
-            % Simulate system response using lsim
-            X = lsim(sys, F_matrix', t)'; 
-            
-            % Calculate RMS response and maximum absolute displacement
-            X_rms = sqrt(mean(X.^2, 2));
-            max_abs_X = max(abs(X), [], 2);
-            
-            % Sort indices so we plot the largest magnitude first (background)
-            [~, sort_idx] = sort(max_abs_X, 'descend');
-            
-            % Generate consistent colors for each DOF
-            colors = lines(n_dof); 
-            
-            % Plot 1: Time History Response
-            figure('Position', [100, 100, 800, 600]);
-            subplot(2,1,1);
-            hold on;
-            % Plot in sorted order: largest to smallest
-            for i = 1:n_dof
-                idx = sort_idx(i);
-                % Only plot if there is actual movement to keep legend clean
-                if max_abs_X(idx) > 1e-12 
-                    plot(t, X(idx, :), 'LineWidth', 1.5, 'Color', colors(idx, :), ...
-                        'DisplayName', dof_labels(idx));
+            %% Subplot 1: X Displacements
+            subplot(2, 2, 1);
+            hold on; grid on;
+            title('X-Translation Time History');
+            xlabel('Time (s)'); ylabel('Displacement (m)');
+            for i = 1:length(x_dofs)
+                node_id = mapping(i).node_id;
+                if filter_nodes && ~ismember(node_id, plot_ids)
+                    continue;
+                end
+                
+                dof = x_dofs(i);
+                if max(abs(X(dof, :))) > 1e-12
+                    plot(t, X(dof, :), 'LineWidth', 1.5, 'Color', colors(i, :), ...
+                        'DisplayName', node_id);
                 end
             end
+            legend('Location', 'best');
             hold off;
-            title('Time History of Displacements (Layered Largest to Smallest)');
-            xlabel('Time (s)');
-            ylabel('Displacement (m, rad)');
-            grid on;
-            legend('Location', 'eastoutside');
             
-            % Plot 2: RMS Bar Chart
-            subplot(2,1,2);
-            bar(1:n_dof, X_rms, 'FaceColor', [0.8500 0.3250 0.0980]);
+            %% Subplot 2: Y Displacements
+            subplot(2, 2, 2);
+            hold on; grid on;
+            title('Y-Translation Time History');
+            xlabel('Time (s)'); ylabel('Displacement (m)');
+            for i = 1:length(y_dofs)
+                node_id = mapping(i).node_id;
+                if filter_nodes && ~ismember(node_id, plot_ids)
+                    continue;
+                end
+                
+                dof = y_dofs(i);
+                if max(abs(X(dof, :))) > 1e-12
+                    plot(t, X(dof, :), 'LineWidth', 1.5, 'Color', colors(i, :), ...
+                        'DisplayName', node_id);
+                end
+            end
+            legend('Location', 'best');
+            hold off;
+            
+            %% Subplot 3: Theta Rotations
+            subplot(2, 2, 3);
+            hold on; grid on;
+            title('\Theta-Rotation Time History');
+            xlabel('Time (s)'); ylabel('Rotation (rad)');
+            for i = 1:length(theta_dofs)
+                node_id = mapping(i).node_id;
+                if filter_nodes && ~ismember(node_id, plot_ids)
+                    continue;
+                end
+                
+                dof = theta_dofs(i);
+                if max(abs(X(dof, :))) > 1e-12
+                    plot(t, X(dof, :), 'LineWidth', 1.5, 'Color', colors(i, :), ...
+                        'DisplayName', node_id);
+                end
+            end
+            legend('Location', 'best');
+            hold off;
+            
+            %% Subplot 4: RMS Summary Bar Chart
+            subplot(2, 2, 4);
+            
+            if filter_nodes
+                dofs_to_keep = [];
+                for i = 1:length(mapping)
+                    if ismember(mapping(i).node_id, plot_ids)
+                        dofs_to_keep = [dofs_to_keep, mapping(i).global_dofs];
+                    end
+                end
+                bar_data = X_rms(dofs_to_keep);
+                bar_labels = dof_labels(dofs_to_keep);
+            else
+                bar_data = X_rms;
+                bar_labels = dof_labels;
+            end
+            
+            bar(1:length(bar_data), bar_data, 'FaceColor', [0.8500 0.3250 0.0980]);
             title('RMS Displacement by Node & DOF');
             xlabel('Degree of Freedom');
             ylabel('X_{RMS} (m, rad)');
-            xticks(1:n_dof);
-            xticklabels(dof_labels);
+            xticks(1:length(bar_data));
+            xticklabels(bar_labels);
             xtickangle(45);
             grid on;
         end
@@ -495,56 +576,48 @@ classdef fem
             tol = 1e-6;
             merged_nodes = [];
             merged_elements = [];
-            
-            % Store mapping from old string IDs to the merged node indices per model
+
             map_old_id = cell(1, nargin);
             map_new_idx = cell(1, nargin);
-            
+
             for i = 1:nargin
                 mdl = varargin{i};
                 map_old_id{i} = strings(1, length(mdl.nodes));
                 map_new_idx{i} = zeros(1, length(mdl.nodes));
-                
+
                 %% 1. Process and Merge Nodes
                 for j = 1:length(mdl.nodes)
                     cn = mdl.nodes(j);
                     match_found = false;
-                    
-                    % Check against already merged nodes
+
                     for k = 1:length(merged_nodes)
                         dx = merged_nodes(k).x - cn.x;
                         dy = merged_nodes(k).y - cn.y;
-                        
+
                         if sqrt(dx^2 + dy^2) <= tol
                             match_found = true;
-                            
-                            % Check for property mismatches
+
                             if abs(merged_nodes(k).mass - cn.mass) > tol
                                 warning('Mass mismatch at merged node %s. Keeping primary mass: %f', merged_nodes(k).id, merged_nodes(k).mass);
                             end
                             if abs(merged_nodes(k).inertia - cn.inertia) > tol
                                 warning('Inertia mismatch at merged node %s. Keeping primary inertia: %f', merged_nodes(k).id, merged_nodes(k).inertia);
                             end
-                            
-                            % Combine constraints (most restrictive defaults to 1 via logical OR)
+
                             merged_nodes(k).constraints = merged_nodes(k).constraints | cn.constraints;
-                            
-                            % Combine string IDs if they differ, without duplicating identical IDs
-                            % Updated to use "-" instead of "_"
+
                             if merged_nodes(k).id ~= cn.id
                                 if ~contains(merged_nodes(k).id, cn.id)
                                     merged_nodes(k).id = merged_nodes(k).id + "-" + cn.id;
                                 end
                             end
-                            
-                            % Store index mapping for element connectivity update
+
                             map_old_id{i}(j) = cn.id;
                             map_new_idx{i}(j) = k;
                             break;
                         end
                     end
-                    
-                    % If no match within tolerance, add as a new node
+
                     if ~match_found
                         if isempty(merged_nodes)
                             merged_nodes = cn;
@@ -556,34 +629,30 @@ classdef fem
                     end
                 end
             end
-            
+
             %% 2. Process Elements and Remap to Merged Nodes
             for i = 1:nargin
                 mdl = varargin{i};
-                
-                % Extract parent variable name, replace underscores, and handle fallback
+
                 parent_name = inputname(i);
                 if isempty(parent_name)
                     parent_name = "Model " + i; 
                 end
                 parent_name = strrep(string(parent_name), "_", " ");
-                
+
                 for j = 1:length(mdl.elements)
                     ce = mdl.elements(j);
-                    
-                    % Prepend prefix based on parent model name using " - "
+
                     ce.id = parent_name + " - " + ce.id;
-                    
-                    % Find updated string IDs for the connected nodes
+
                     n1_old_idx = find(map_old_id{i} == ce.nodes(1));
                     new_n1_id = merged_nodes(map_new_idx{i}(n1_old_idx)).id;
-                    
+
                     n2_old_idx = find(map_old_id{i} == ce.nodes(2));
                     new_n2_id = merged_nodes(map_new_idx{i}(n2_old_idx)).id;
-                    
-                    % Update element's node array with the unified node IDs
+
                     ce.nodes = [new_n1_id, new_n2_id];
-                    
+
                     if isempty(merged_elements)
                         merged_elements = ce;
                     else
@@ -591,12 +660,11 @@ classdef fem
                     end
                 end
             end
-            
+
             %% 3. Package and Generate Global Matrices
             combined_model.nodes = merged_nodes;
             combined_model.elements = merged_elements;
-            
-            % Pass the consolidated struct to the generator to map DOFs and output M, K matrices
+
             combined_model = fem.generate_fem_matrices(combined_model);
         end
         
@@ -609,139 +677,120 @@ classdef fem
             %                or [min, max] bound to plot a subset. 
             
             if nargin < 2
-                freq_range = [];
-            end
-            
-            fn = model.fn;
-            modes = model.modes;
-            nodes = model.nodes;
-            elements = model.elements;
-            mapping = model.mapping;
-            node_ids = [nodes.id];
-            
-            % Determine which modes to plot based on freq_range
-            if isempty(freq_range)
-                modes_to_plot = 1:length(fn); % Plot all
-            elseif length(freq_range) == 1
-                % Find closest mode
-                [~, min_idx] = min(abs(fn - freq_range));
-                modes_to_plot = min_idx;
-            elseif length(freq_range) == 2
-                % Find modes within bounds
-                modes_to_plot = find(fn >= freq_range(1) & fn <= freq_range(2));
-                if isempty(modes_to_plot)
-                    warning('No modes found in the specified frequency range.');
-                    return;
-                end
-            else
-                error('freq_range must be empty, a scalar, or a 2-element vector.');
-            end
-            
-            % Set colors
-            bg_grey = [0.7 0.7 0.7];
-            moss_green = '#8A9A5B';
-            
-            % Calculate automatic spatial scaling for the mode shape visualizations.
-            % Extract neutral node positions
-            x_vals = [nodes.x];
-            y_vals = [nodes.y];
-            max_dim = max(max(x_vals) - min(x_vals), max(y_vals) - min(y_vals));
-            if max_dim == 0; max_dim = 1; end % Fallback for single node
-            
-            % Limit maximum visual displacement to 15% of the model's max dimension
-            target_disp = 0.15 * max_dim; 
-            
-            % Length of the rotation indicating line (10% of model dim)
-            rot_line_len = 0.10 * max_dim; 
-            
-            % Create figure with a flowing tiled layout
-            figure('Name', 'Mode Shapes', 'Position', [100, 100, 1000, 800]);
-            t = tiledlayout('flow', 'TileSpacing', 'compact', 'Padding', 'compact');
-            
-            for i = 1:length(modes_to_plot)
-                m_idx = modes_to_plot(i);
-                mode_vec = modes(:, m_idx);
-                
-                % Calculate scaling factor for this specific mode
-                % Extract only translational DOFs (x and y) to find max translation
-                trans_dofs = [];
-                for k = 1:length(mapping)
-                    trans_dofs = [trans_dofs, mapping(k).global_dofs(1:2)];
-                end
-                max_trans_val = max(abs(mode_vec(trans_dofs)));
-                
-                if max_trans_val > 1e-12
-                    scale_factor = target_disp / max_trans_val;
-                else
-                    scale_factor = 0; % Prevent division by zero for purely rotational modes
-                end
-                
-                nexttile;
-                hold on; grid on; axis equal;
-                title(sprintf('Mode %d: %.3f Hz', m_idx, fn(m_idx)));
-                
-                % 1. Plot Background (Undeformed) Structure
-                for e = 1:length(elements)
-                    el = elements(e);
-                    n1_idx = find(node_ids == el.nodes(1));
-                    n2_idx = find(node_ids == el.nodes(2));
-                    
-                    plot([nodes(n1_idx).x, nodes(n2_idx).x], ...
-                         [nodes(n1_idx).y, nodes(n2_idx).y], ...
-                         'Color', bg_grey, 'LineWidth', 1);
-                end
-                for n = 1:length(nodes)
-                    scatter(nodes(n).x, nodes(n).y, 20, 'MarkerEdgeColor', bg_grey, 'MarkerFaceColor', bg_grey);
-                end
-                
-                % 2. Plot Deformed Mode Shape
-                % Extract deformed node positions
-                def_x = zeros(1, length(nodes));
-                def_y = zeros(1, length(nodes));
-                def_theta = zeros(1, length(nodes));
-                
-                for n = 1:length(nodes)
-                    dofs = mapping(n).global_dofs;
-                    def_x(n) = nodes(n).x + mode_vec(dofs(1)) * scale_factor;
-                    def_y(n) = nodes(n).y + mode_vec(dofs(2)) * scale_factor;
-                    def_theta(n) = mode_vec(dofs(3)) * scale_factor; 
-                end
-                
-                % Draw deformed elements
-                for e = 1:length(elements)
-                    el = elements(e);
-                    n1_idx = find(node_ids == el.nodes(1));
-                    n2_idx = find(node_ids == el.nodes(2));
-                    
-                    if el.type == "spring"
-                        line_style = '--';
-                    else
-                        line_style = '-';
-                    end
-                    
-                    plot([def_x(n1_idx), def_x(n2_idx)], ...
-                         [def_y(n1_idx), def_y(n2_idx)], ...
-                         line_style, 'Color', moss_green, 'LineWidth', 2);
-                end
-                
-                % Draw deformed nodes (Squares with rotation lines)
-                for n = 1:length(nodes)
-                    % Plot square node
-                    scatter(def_x(n), def_y(n), 40, 's', 'MarkerEdgeColor', moss_green, 'MarkerFaceColor', moss_green);
-                    
-                    % Plot rotation indicator line
-                    theta = def_theta(n);
-                    dx = (rot_line_len/2) * cos(theta);
-                    dy = (rot_line_len/2) * sin(theta);
-                    
-                    plot([def_x(n) - dx, def_x(n) + dx], ...
-                         [def_y(n) - dy, def_y(n) + dy], ...
-                         'k-', 'LineWidth', 1.5);
-                end
-                
-                hold off;
-            end
+            freq_range = [];
         end
+        
+        fn = model.fn;
+        modes = model.modes;
+        nodes = model.nodes;
+        elements = model.elements;
+        mapping = model.mapping;
+        node_ids = [nodes.id];
+        
+        if isempty(freq_range)
+            modes_to_plot = 1:length(fn); 
+        elseif length(freq_range) == 1
+            [~, min_idx] = min(abs(fn - freq_range));
+            modes_to_plot = min_idx;
+        elseif length(freq_range) == 2
+            modes_to_plot = find(fn >= freq_range(1) & fn <= freq_range(2));
+            if isempty(modes_to_plot)
+                warning('No modes found in the specified frequency range.');
+                return;
+            end
+        else
+            error('freq_range must be empty, a scalar, or a 2-element vector.');
+        end
+        
+        bg_grey = [0.7 0.7 0.7];
+        moss_green = '#8A9A5B';
+        
+        x_vals = [nodes.x];
+        y_vals = [nodes.y];
+        max_dim = max(max(x_vals) - min(x_vals), max(y_vals) - min(y_vals));
+        if max_dim == 0; max_dim = 1; end 
+        
+        target_disp = 0.15 * max_dim; 
+        rot_line_len = 0.10 * max_dim; 
+        
+        figure('Name', 'Mode Shapes', 'Position', [100, 100, 1000, 800]);
+        t_layout = tiledlayout('flow', 'TileSpacing', 'compact', 'Padding', 'compact');
+        
+        for i = 1:length(modes_to_plot)
+            m_idx = modes_to_plot(i);
+            mode_vec = modes(:, m_idx);
+            
+            trans_dofs = [];
+            for k = 1:length(mapping)
+                trans_dofs = [trans_dofs, mapping(k).global_dofs(1:2)];
+            end
+            max_trans_val = max(abs(mode_vec(trans_dofs)));
+            
+            if max_trans_val > 1e-12
+                scale_factor = target_disp / max_trans_val;
+            else
+                scale_factor = 0; 
+            end
+            
+            nexttile;
+            hold on; grid on; axis equal;
+            title(sprintf('Mode %d: %.3f Hz', m_idx, fn(m_idx)));
+            
+            for e = 1:length(elements)
+                el = elements(e);
+                n1_idx = find(node_ids == el.nodes(1));
+                n2_idx = find(node_ids == el.nodes(2));
+                
+                plot([nodes(n1_idx).x, nodes(n2_idx).x], ...
+                     [nodes(n1_idx).y, nodes(n2_idx).y], ...
+                     'Color', bg_grey, 'LineWidth', 1);
+            end
+            for n = 1:length(nodes)
+                scatter(nodes(n).x, nodes(n).y, 20, 'MarkerEdgeColor', bg_grey, 'MarkerFaceColor', bg_grey);
+            end
+            
+            def_x = zeros(1, length(nodes));
+            def_y = zeros(1, length(nodes));
+            def_theta = zeros(1, length(nodes));
+            
+            for n = 1:length(nodes)
+                dofs = mapping(n).global_dofs;
+                def_x(n) = nodes(n).x + mode_vec(dofs(1)) * scale_factor;
+                def_y(n) = nodes(n).y + mode_vec(dofs(2)) * scale_factor;
+                def_theta(n) = mode_vec(dofs(3)) * scale_factor; 
+            end
+            
+            for e = 1:length(elements)
+                el = elements(e);
+                n1_idx = find(node_ids == el.nodes(1));
+                n2_idx = find(node_ids == el.nodes(2));
+                
+                if el.type == "spring"
+                    line_style = '--';
+                else
+                    line_style = '-';
+                end
+                
+                plot([def_x(n1_idx), def_x(n2_idx)], ...
+                     [def_y(n1_idx), def_y(n2_idx)], ...
+                     line_style, 'Color', moss_green, 'LineWidth', 2);
+            end
+            
+            for n = 1:length(nodes)
+                scatter(def_x(n), def_y(n), 40, 's', 'MarkerEdgeColor', moss_green, 'MarkerFaceColor', moss_green);
+                
+                theta = def_theta(n);
+                dx = (rot_line_len/2) * cos(theta);
+                dy = (rot_line_len/2) * sin(theta);
+                
+                plot([def_x(n) - dx, def_x(n) + dx], ...
+                     [def_y(n) - dy, def_y(n) + dy], ...
+                     'k-', 'LineWidth', 1.5);
+            end
+            
+            hold off;
+        end
+    end
 
         %% =============================================================================== 
         function [Fx, Fy, M_theta] = generate_rwa_disturbance(t, rpm_start, rpm_end, unbalance, rotor_inertia)
@@ -771,7 +820,6 @@ classdef fem
             t_total = t_sweep(end);
 
             % Convert RPM bounds to angular velocity (rad/s)
-            % 1 RPM = 2*pi/60 rad/s = pi/30 rad/s
             omega_start = rpm_start * (pi / 30);
             omega_end = rpm_end * (pi / 30);
 
@@ -782,11 +830,9 @@ classdef fem
             omega = omega_start + alpha .* t_sweep;
 
             % Cumulative rotational phase angle via integration of omega
-            % theta(t) = integral(omega) dt = w0*t + 0.5*alpha*t^2
             theta_rot = omega_start .* t_sweep + 0.5 * alpha .* (t_sweep.^2);
 
             % Compute magnitude of the centrifugal force (F = m*r*omega^2)
-            % unbalance is already defined as mass * radius (m*r)
             force_magnitude = unbalance .* (omega.^2);
 
             % Resolve force into x and y components
@@ -794,9 +840,6 @@ classdef fem
             Fy = force_magnitude .* sin(theta_rot);
 
             % Compute the reaction torque on the structure (T_reaction = - I * alpha)
-            % Since alpha is constant for a linear sweep, the torque is constant,
-            % but we map it to the length of the time vector to fit the options struct.
-            % We use positive magnitude here, sign conventions dictate application direction.
             M_theta = (rotor_inertia * alpha) .* ones(size(t));
 
 
@@ -833,7 +876,6 @@ classdef fem
             % Extract the mapping dictionary
             mapping = model.mapping;
 
-            % Nested helper function to find index safely
             function idx = get_theta_idx(target_id)
                 all_ids = string({mapping.node_id});
                 target_str = string(target_id);
@@ -845,41 +887,124 @@ classdef fem
                         'The optical node "%s" was not found in the model mapping. Please check for typos.', target_str);
                 end
 
-                % Assuming node IDs are unique, grab the first match
                 matched_node = mapping(is_match);
-                idx = matched_node(1).global_dofs(3); % 3rd DOF is theta
+                idx = matched_node(1).global_dofs(3); 
             end
 
-            %% 1. Secondary Mirror (SM) Contribution
-            % Sensitivity: 2 * compression_ratio = 2 * 8.5 = 17
             sm_idx = get_theta_idx(optical_nodes.sm_id);
             theta_sm = X(sm_idx, :);
             error_sm = 17 * theta_sm;
 
-            %% 2. Primary Mirror (PM) Contributions
             num_pms = length(optical_nodes.pm_ids);
             num_time_steps = size(X, 2);
 
             theta_pms = zeros(num_pms, num_time_steps);
             error_pms = zeros(num_pms, num_time_steps);
-            error_total = zeros(num_pms, num_time_steps);
+            error_total_rad = zeros(num_pms, num_time_steps);
 
-            % Sensitivity: 2
             for i = 1:num_pms
                 pm_idx = get_theta_idx(optical_nodes.pm_ids{i});
                 theta_pms(i, :) = X(pm_idx, :);
                 error_pms(i, :) = 2 * theta_pms(i, :);
 
-                % Superimpose with SM error (worst case absolute summation)
-                error_total(i, :) = abs(error_pms(i, :)) + abs(error_sm);
+                error_total_rad(i, :) = abs(error_pms(i, :)) + abs(error_sm);
             end
 
-            % Pack granular data into the components struct for detailed debugging
-            components.sm = error_sm;
-            components.pms = error_pms;
-            components.total = error_total;
+            % Convert output to arc-seconds (1 rad = (180/pi)*3600 arc-sec)
+            rad_to_arcsec = (180 / pi) * 3600;
 
+            components.sm = error_sm * rad_to_arcsec;
+            components.pms = error_pms * rad_to_arcsec;
+            components.total = error_total_rad * rad_to_arcsec;
 
+            error_total = components.total;
+        end
+
+        %% =============================================================================== 
+        function plot_pointing_error_requirement(t, error_total, threshold, window_size)
+            % PLOT_POINTING_ERROR_REQUIREMENT Plots system error vs requirement and evaluates 
+            % compliance in specific time windows.
+            %
+            % SYNTAX:
+            %   fem.plot_pointing_error_requirement(t, error_total, threshold, window_size)
+
+            if nargin < 3 || isempty(threshold)
+                threshold = 1.88e-3; % arc-seconds requirement
+            end
+            if nargin < 4 || isempty(window_size)
+                window_size = 30; % seconds
+            end
+
+            % If there are multiple payload mirrors, take the worst-case error at each step
+            if size(error_total, 1) > 1
+                max_error = max(abs(error_total), [], 1);
+            else
+                max_error = abs(error_total);
+            end
+
+            % Calculate compliance in time windows
+            t_max = t(end);
+            num_windows = max(1, floor(t_max / window_size));
+            meets_req = zeros(1, num_windows);
+            window_starts = 0:window_size:(num_windows-1)*window_size;
+            window_ends = window_starts + window_size;
+
+            for w = 1:num_windows
+                idx = (t >= window_starts(w)) & (t <= window_ends(w));
+                % Requirement: Error must strictly stay below the threshold in the window
+                if max(max_error(idx)) <= threshold
+                    meets_req(w) = 1;
+                end
+            end
+
+            compliance_pct = (sum(meets_req) / num_windows) * 100;
+
+            % Plotting
+            figure('Name', 'Optical Pointing Error vs Requirement', 'Position', [150, 150, 1000, 700]);
+
+            % Top Plot: Error over time
+            subplot(2, 1, 1);
+            hold on; grid on;
+            plot(t, max_error, 'b', 'LineWidth', 1.5, 'DisplayName', 'Absolute System Error');
+            yline(threshold, 'r--', 'LineWidth', 2, 'DisplayName', sprintf('Requirement (%.2e arcsec)', threshold));
+            title('Overall System Pointing Error Over Time');
+            xlabel('Time (s)');
+            ylabel('Absolute Error (arcsec)');
+            legend('Location', 'best');
+            hold off;
+
+            % Bottom Plot: Window Compliance
+            subplot(2, 1, 2);
+            hold on; grid on;
+
+            % Plot boolean stairs
+            stairs([window_starts, window_ends(end)], [meets_req, meets_req(end)], 'k', 'LineWidth', 1.5);
+
+            % Shade passing/failing windows
+            for w = 1:num_windows
+                if meets_req(w)
+                    patch([window_starts(w) window_ends(w) window_ends(w) window_starts(w)], ...
+                        [0 0 1 1], 'g', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                else
+                    patch([window_starts(w) window_ends(w) window_ends(w) window_starts(w)], ...
+                        [0 0 1 1], 'r', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                end
+            end
+
+            ylim([-0.2, 1.2]);
+            yticks([0, 1]);
+            yticklabels({'Fail', 'Pass'});
+            title(sprintf('Requirement Compliance (%d-Second Windows)', window_size));
+            xlabel('Time (s)');
+            ylabel('Compliance Status');
+
+            % Add Percentage Text Overlay
+            text_x = (window_starts(1) + window_ends(end)) / 2;
+            text(text_x, 0.5, sprintf('Total Compliance: %.1f%%', compliance_pct), ...
+                'FontSize', 14, 'FontWeight', 'bold', 'HorizontalAlignment', 'center', ...
+                'BackgroundColor', 'w', 'EdgeColor', 'k');
+
+            hold off;
         end
 
         %% =============================================================================== 
@@ -903,55 +1028,48 @@ classdef fem
         
         % Total number of degrees of freedom
         n = size(model.M, 1);
-        
-        % --- 1. Construct A Matrix (System Dynamics) ---
-        % Calculate Rayleigh Proportional Damping: C = alpha*M + beta*K
-        % Using the first two natural frequencies to solve for alpha and beta
-        w1 = model.fn(1) * 2 * pi;
-        w2 = model.fn(2) * 2 * pi;
-        
-        % Setup system of equations for damping coefficients
-        % [ 1/(2*w1), w1/2 ] [alpha] = [zeta]
-        % [ 1/(2*w2), w2/2 ] [beta ]   [zeta]
+
+        % Filter out rigid body modes to compute Rayleigh damping
+        flex_modes = model.fn(model.fn > 1e-4);
+        if length(flex_modes) < 2
+            error('Not enough flexible modes to compute Rayleigh damping.');
+        end
+        w1 = flex_modes(1) * 2 * pi;
+        w2 = flex_modes(2) * 2 * pi;
+
         W = [1/(2*w1), w1/2; 
-             1/(2*w2), w2/2];
+            1/(2*w2), w2/2];
         ab = W \ [zeta; zeta];
         alpha = ab(1);
         beta = ab(2);
-        
+
         C_damp = alpha * model.M + beta * model.K;
-        
-        % State vector: X = [displacement; velocity]
-        % A = [ 0, I ; -M\K, -M\C_damp ]
+
         A = [zeros(n, n), eye(n);
-             -model.M \ model.K, -model.M \ C_damp];
-             
-        % --- 2. Construct B Matrix (Input Mapping) ---
-        % Extract the forces array from the options struct
+            -model.M \ model.K, -model.M \ C_damp];
+
         if isfield(options, 'forces')
             forces_array = options.forces;
         else
-            forces_array = options; % Fallback in case options.forces was passed directly
+            forces_array = options; 
         end
-        
+
         num_inputs = length(forces_array);
-        B_top = zeros(n, num_inputs); % Forces don't directly affect velocity states
+        B_top = zeros(n, num_inputs); 
         B_bottom = zeros(n, num_inputs);
-        
-        % Robustly cast all mapping IDs to strings and trim whitespace
+
         map_ids = strtrim(string({model.mapping.node_id}));
-        
+
         for i = 1:num_inputs
             target_id = strtrim(string(forces_array(i).node_id));
             dof_type = lower(strtrim(string(forces_array(i).dof)));
-            
+
             idx = find(strcmp(map_ids, target_id));
-            
+
             if isempty(idx)
                 error('Force node "%s" not found in model mapping.', target_id);
             end
-            
-            % Determine which specific DOF (1=x, 2=y, 3=theta) to apply force to
+
             if strcmp(dof_type, "x")
                 dof_idx = model.mapping(idx).global_dofs(1);
             elseif strcmp(dof_type, "y")
@@ -961,49 +1079,36 @@ classdef fem
             else
                 error('Invalid DOF "%s" for force node "%s". Use "x", "y", or "theta".', dof_type, target_id);
             end
-            
-            % Apply the force mapping (F = M*a -> a = M\F)
-            % We place a 1 in the corresponding input column/DOF row
+
             F_vec = zeros(n, 1);
             F_vec(dof_idx) = 1;
             B_bottom(:, i) = model.M \ F_vec;
         end
-        
+
         B = [B_top; B_bottom];
-        
-        % --- 3. Construct C Matrix (Output Mapping) ---
-        % We want a single output row representing total optical pointing error
-        % The output depends on displacements, not velocities
-        C_disp = zeros(1, n);
-        
-        % Helper nested function to safely get the theta index
-        function t_idx = get_theta(node_string)
-            target = strtrim(string(node_string));
-            node_idx = find(strcmp(map_ids, target));
-            if isempty(node_idx)
-                error('Optical node "%s" not found in model mapping.', target);
+
+        % Build C matrix with one row per Primary Mirror
+            function t_idx = get_theta(node_string)
+                target = strtrim(string(node_string));
+                node_idx = find(strcmp(map_ids, target));
+                if isempty(node_idx)
+                    error('Optical node "%s" not found in model mapping.', target);
+                end
+                t_idx = model.mapping(node_idx).global_dofs(3);
             end
-            t_idx = model.mapping(node_idx).global_dofs(3);
-        end
-        
-        % Secondary Mirror Contribution (2 * 8.5 * theta_sm)
-        sm_dof = get_theta(optical_nodes.sm_id);
-        C_disp(sm_dof) = 2 * 8.5;
-        
-        % Primary Mirror Contributions (-2 * theta_pm)
-        % (Using negative to represent relative rotation error)
-        for i = 1:length(optical_nodes.pm_ids)
-            pm_dof = get_theta(optical_nodes.pm_ids{i});
-            C_disp(pm_dof) = -2;
-        end
-        
-        % C matrix maps state vector [displacement; velocity] to output
-        C = [C_disp, zeros(1, n)];
-        
-        % --- 4. Construct D Matrix (Direct Feedthrough) ---
-        D = zeros(1, num_inputs);
-        
-        
+
+            num_pms = length(optical_nodes.pm_ids);
+            C_disp = zeros(num_pms, n);
+            sm_dof = get_theta(optical_nodes.sm_id);
+
+            for i = 1:num_pms
+                pm_dof = get_theta(optical_nodes.pm_ids{i});
+                C_disp(i, sm_dof) = 17; % 2 * 8.5 for SM
+                C_disp(i, pm_dof) = 2;
+            end
+
+            C = [C_disp, zeros(num_pms, n)];
+            D = zeros(num_pms, num_inputs);
         end
 
         %% =============================================================================== 
@@ -1033,50 +1138,34 @@ classdef fem
                 input_idx = 1;
             end
 
-            % Validate input sizes and force Single-Input Single-Output (SISO) system
             if size(B, 2) > 1
                 warning('Multiple inputs detected in B matrix. Automatically slicing to use input index %d.', input_idx);
                 B = B(:, input_idx);
                 D = D(:, input_idx);
             end
 
-            if size(C, 1) > 1
-                error('Multiple outputs detected in C matrix. The system must have a single output for pointing error.');
-            end
-
-            % Construct the continuous-time state-space model
             sys = ss(A, B, C, D);
-
-            % Convert frequency range from Hz to angular frequency (rad/s)
-            % freqresp requires frequencies in rad/s
             w_range = 2 * pi * f_range;
 
-            % Evaluate the complex frequency response H(jw) of the system
-            % squeeze() removes singleton dimensions to return a 1D array of complex numbers
+            % freqresp returns a 3D array: [outputs x inputs x frequencies]
             H_complex = squeeze(freqresp(sys, w_range));
 
-            % Ensure both the frequency vector and the response are the exact same shape (column vectors)
-            % This prevents orientation mismatch errors in trapz or element-wise math
-            f_range_col = f_range(:);
-            H_complex_col = H_complex(:);
+            % If there's only 1 output, squeeze makes it a column vector, we want it to be 1 x N
+            if size(C, 1) == 1
+                H_complex = H_complex(:)';
+            end
 
-            % Define the Motor Noise PSD profile: S_xx = 0.01 / f
-            % Units: (N*m)^2 / Hz
-            S_xx = 0.01 ./ f_range_col;
+            f_range_row = f_range(:)';
+            S_xx = 0.01 ./ f_range_row;
 
-            % Compute the output PSD profile G_yy(f) = |H(f)|^2 * S_xx(f)
-            % The transfer function maps input torque to output pointing error
-            G_yy = (abs(H_complex_col).^2) .* S_xx;
+            % Implicit expansion will multiply S_xx across all rows (outputs)
+            G_yy = (abs(H_complex).^2) .* S_xx;
 
-            % Integrate the output PSD over the frequency range (in Hz)
-            % using the trapezoidal rule to find the variance (sigma^2)
-            variance = trapz(f_range_col, G_yy);
-
-            % The RMS error (1-sigma) is the square root of the variance
+            % Integrate across the frequency dimension (dimension 2)
+            variance = trapz(f_range_row, G_yy, 2);
             rms_error = sqrt(variance);
-
-
         end
+
     end
     
 end

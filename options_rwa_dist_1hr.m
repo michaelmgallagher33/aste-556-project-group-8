@@ -32,7 +32,7 @@ struct_out.z = 0.01; % 1% structural damping
 % Define external forcing profiles using helper function
 rpm_start = -5000; rpm_end = 5000; % RPM
 unbalance = 0.1; % kgm
-rotor_inertia = 0.5 * 10 * 0.2^2; % (Shape Factor) x (Mass) x (Radius)^2
+rotor_inertia = 0.5 * 15 * 0.2^2; % (Shape Factor) x (Mass) x (Radius)^2
 [Fx, Fy, M_theta] = fem.generate_rwa_disturbance(t, rpm_start, rpm_end, unbalance, rotor_inertia);
 
 % Disturbances: Left RWA
