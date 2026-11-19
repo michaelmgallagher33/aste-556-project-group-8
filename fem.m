@@ -719,13 +719,7 @@ classdef fem
         
         %% =============================================================================== 
         function plot_mode_shapes(model, freq_range)
-            % PLOT_MODE_SHAPES Visualizes structural eigenmodes.
-            % Inputs:
-            %   model      : FEM struct with evaluated fn and modes.
-            %   freq_range : (Optional) Single frequency to find the closest match, 
-            %                or [min, max] bound to plot a subset. 
-            
-            if nargin < 2
+        if nargin < 2
             freq_range = [];
         end
         
@@ -783,7 +777,14 @@ classdef fem
             
             nexttile;
             hold on; grid on; axis equal;
-            title(sprintf('Mode %d: %.3f Hz', m_idx, fn(m_idx)));
+            
+            % Title Generation with Effective Mass Percentage
+            title_str = sprintf('Mode %d: %.3f Hz', m_idx, fn(m_idx));
+            if isfield(model, 'effective_mass_pct') && ~isempty(model.effective_mass_pct)
+                emp = model.effective_mass_pct(m_idx, :);
+                title_str = [title_str, sprintf('\nEff Mass %% [X:%.1f, Y:%.1f, \\theta:%.1f]', emp(1), emp(2), emp(3))];
+            end
+            title(title_str);
             
             for e = 1:length(elements)
                 el = elements(e);
