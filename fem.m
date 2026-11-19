@@ -151,8 +151,40 @@ classdef fem
             K_global(dofs(3), dofs(3)) = K_global(dofs(3), dofs(3)) + nodes(i).k_rot;
         end
         
-        % 5. Calculate Natural Frequencies and Mode Shapes
+        % 5. Build Rigid Body Transformation Matrix and Mass Properties
+        phi_matrix = zeros(num_dofs, 3);
+        for i = 1:num_nodes
+            dofs = dof_map(i).global_dofs;
+            x = nodes(i).x;
+            y = nodes(i).y;
+            
+            % Rigid body displacement mappings for [X_trans, Y_trans, Z_rot]
+            phi_matrix(dofs(1), :) = [1, 0, -y];
+            phi_matrix(dofs(2), :) = [0, 1,  x];
+            phi_matrix(dofs(3), :) = [0, 0,  1];
+        end
+        
+        % Compute Rigid Body Mass Matrix to extract properties
+        M_rb = phi_matrix' * M_global * phi_matrix; 
+        
+        M_total = M_rb(1, 1); 
+        if M_total > 1e-12
+            X_cg = M_rb(2, 3) / M_total;
+            Y_cg = -M_rb(1, 3) / M_total;
+        else
+            X_cg = 0;
+            Y_cg = 0;
+        end
+        
+        % Total Inertia about the CG using the Parallel Axis Theorem
+        I_total = M_rb(3, 3) - M_total * (X_cg^2 + Y_cg^2);
+        
+        % 6. Calculate Natural Frequencies and Mode Shapes
         [V, D] = eig(K_global, M_global);
+        
+        % Explicitly Mass-Normalize the eigenvectors
+        m_modal = diag(V' * M_global * V);
+        V_norm = V * diag(1 ./ sqrt(m_modal));
     
         evals = diag(D);
         evals(abs(evals) < 1e-10) = 0; 
@@ -161,14 +193,31 @@ classdef fem
         fn_all = omega / (2 * pi);
     
         [fn_sorted, sort_idx] = sort(fn_all);
-        modes_sorted = V(:, sort_idx);
+        modes_sorted = V_norm(:, sort_idx); % Use the normalized and sorted modes
+        
+        % 7. Calculate Modal Participation and Effective Mass
+        % L = Phi_norm^T * M * Phi_rb
+        participation_factors = modes_sorted' * M_global * phi_matrix; 
+        effective_mass = participation_factors.^2;
+        
+        % Percentages (Handling zero-mass directions safely)
+        M_rb_diag = diag(M_rb)';
+        M_rb_diag(M_rb_diag < 1e-12) = 1; 
+        effective_mass_pct = (effective_mass ./ M_rb_diag) * 100;
     
-        % Pack outputs back into the struct
+        % 8. Pack outputs back into the struct
         model.K = K_global;
         model.M = M_global;
+        model.phi_matrix = phi_matrix;
+        model.M_total = M_total;
+        model.I_total = I_total;
+        model.CG = [X_cg, Y_cg];
         model.fn = fn_sorted;
         model.modes = modes_sorted;
-    end
+        model.participation_factors = participation_factors;
+        model.effective_mass = effective_mass;
+        model.effective_mass_pct = effective_mass_pct;
+        end
     
     % ===============================================================================
         
