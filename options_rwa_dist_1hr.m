@@ -27,7 +27,7 @@ t = t_span(1) : 1/fs : t_span(2);
 
 % Assign base simulation parameters
 struct_out.t = t;
-struct_out.z = 0.01; % 1% structural damping
+struct_out.z = 0.2; % ACS damping
 
 % Define external forcing profiles using helper function
 rpm_start = -5000; rpm_end = 5000; % RPM
