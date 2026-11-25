@@ -28,117 +28,259 @@ classdef viz
         nodes = model.nodes;
         elements = model.elements;
         num_elements = length(elements);
+        num_nodes = length(nodes);
         node_ids = [nodes.id];
-        
-        grey_color = [0.5, 0.5, 0.5];
-        stiffness_color = '#F9BE08';
-        mass_color = '#8A9A5B';
-        royal_blue = '#4169E1'; 
-        
-        figure('Name', 'FEM Struct Visualization', 'Position', [100, 100, 1500, 500]);
-        
-        %% Plot 1: Pure Geometry with Labels
-        subplot(1, 3, 1);
-        hold on; grid on; axis equal;
-        title('Geometry and Mapping');
-        xlabel('X Position (m)'); ylabel('Y Position (m)');
-        
-        for i = 1:num_elements
-            el = fem.get_element(elements, i);
-            n1_idx = find(node_ids == el.nodes(1));
-            n2_idx = find(node_ids == el.nodes(2));
-            
-            x = [nodes(n1_idx).x, nodes(n2_idx).x];
-            y = [nodes(n1_idx).y, nodes(n2_idx).y];
-            
-            plot(x, y, '-', 'Color', grey_color, 'LineWidth', 1.5);
-            text(mean(x), mean(y), "  " + el.id, 'Color', grey_color, 'FontSize', 9);
-        end
-        
-        for i = 1:length(nodes)
-            scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
-            
-            dofs = model.mapping(i).global_dofs;
-            label = sprintf(' %s\n DOFs: [%d, %d, %d]', nodes(i).id, dofs(1), dofs(2), dofs(3));
-            text(nodes(i).x, nodes(i).y, label, 'VerticalAlignment', 'bottom', 'FontSize', 9);
-        end
-        hold off;
-        
-        %% Plot 2: Stiffness Mapping
-        subplot(1, 3, 2);
-        hold on; grid on; axis equal;
-        title('Relative Element Stiffness (Axial)');
-        xlabel('X Position (m)'); ylabel('Y Position (m)');
-        
-        k_mags = zeros(1, num_elements);
+    
+        % Color palette
+        grey_color    = [0.5, 0.5, 0.5];
+        axial_color   = '#F9BE08';
+        shear_color   = '#E05A47';
+        rot_color     = '#7B68EE';
+        mass_color    = '#8A9A5B';
+        el_mass_color = '#2E8B57';
+        royal_blue    = '#4169E1';
+    
+        % Precompute element midpoints and properties
+        k_ax  = zeros(1, num_elements);
+        k_sh  = zeros(1, num_elements);
+        k_rot = zeros(1, num_elements);
+        m_el  = zeros(1, num_elements);
+        el_xm = zeros(1, num_elements);
+        el_ym = zeros(1, num_elements);
+    
         for i = 1:num_elements
             el = fem.get_element(elements, i);
             n1 = nodes(node_ids == el.nodes(1));
             n2 = nodes(node_ids == el.nodes(2));
-            L = sqrt((n2.x - n1.x)^2 + (n2.y - n1.y)^2);
-            
-            if el.type == "beam"
-                k_mags(i) = (el.E * el.A) / L;
+            L  = hypot(n2.x - n1.x, n2.y - n1.y);
+    
+            el_xm(i) = 0.5 * (n1.x + n2.x);
+            el_ym(i) = 0.5 * (n1.y + n2.y);
+    
+            if el.type == "beam" && L > 0
+                k_ax(i)  = (el.E * el.A) / L;
+                k_sh(i)  = (12 * el.E * el.I) / (L^3);
+                k_rot(i) = (4 * el.E * el.I) / L;
+                m_el(i)  = el.rho * L;
             elseif el.type == "spring"
-                k_mags(i) = el.k_spring(1);
+                k_ax(i)  = el.k_spring(1);
+                k_sh(i)  = el.k_spring(2);
+                k_rot(i) = el.k_spring(3);
+                m_el(i)  = 0;
             end
         end
-        
-        k_min = min(k_mags); k_max = max(k_mags);
-        if k_max == k_min
-            widths = ones(1, num_elements) * 3;
-        else
-            widths = 1 + 4 * (k_mags - k_min) / (k_max - k_min);
-        end
-        
+    
+        node_x = [nodes.x];
+        node_y = [nodes.y];
+        bbox = [min(node_x), max(node_x), min(node_y), max(node_y)];
+    
+        % Visual scaling
+        ax_widths  = scale_visual(k_ax,  1.2, 6.0, true);
+        sh_sizes   = scale_visual(k_sh,  30,  220, true);
+        rot_sizes  = scale_visual(k_rot, 60,  360, true);
+        m_el_width = scale_visual(m_el,  1.2, 6.0, false);
+        m_el_sizes = scale_visual(m_el,  30,  200, false);
+    
+        % Dynamic figure height based on model size (clamped between 600 and 900 px)
+        fig_h = min(max(600, 450 + 18 * (num_elements + num_nodes)), 900);
+        fig_w = 1050;
+    
+        %% Figure 1: Pure Geometry & Mapping
+        figure('Name', 'FEM - Geometry and Mapping', 'Position', [50, 80, fig_w, fig_h]);
+        ax1 = axes;
+        hold(ax1, 'on'); grid(ax1, 'on'); axis(ax1, 'equal');
+        title(ax1, 'Geometry and Mapping');
+        xlabel(ax1, 'X Position (m)'); ylabel(ax1, 'Y Position (m)');
+    
+        geom_labels = strings(1, num_elements + num_nodes);
+        geom_colors = cell(1, num_elements + num_nodes);
+    
         for i = 1:num_elements
             el = fem.get_element(elements, i);
             n1 = nodes(node_ids == el.nodes(1));
             n2 = nodes(node_ids == el.nodes(2));
-            
-            if el.type == "spring"
-                plot([n1.x, n2.x], [n1.y, n2.y], '--', 'Color', stiffness_color, 'LineWidth', widths(i));
+            plot(ax1, [n1.x, n2.x], [n1.y, n2.y], '-', 'Color', grey_color, 'LineWidth', 1.5);
+    
+            geom_labels(i) = string(el.id);
+            geom_colors{i} = grey_color;
+        end
+    
+        for i = 1:num_nodes
+            scatter(ax1, nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
+            dofs = model.mapping(i).global_dofs;
+            idx = num_elements + i;
+            geom_labels(idx) = sprintf('%s\nDOFs: [%d, %d, %d]', nodes(i).id, dofs(1), dofs(2), dofs(3));
+            geom_colors{idx} = royal_blue;
+        end
+    
+        draw_callout_labels(ax1, [el_xm, node_x], [el_ym, node_y], geom_labels, geom_colors, bbox);
+        hold(ax1, 'off');
+    
+        %% Figure 2: Element Stiffness Mapping
+        figure('Name', 'FEM - Element Stiffness', 'Position', [100, 60, fig_w, fig_h]);
+        ax2 = axes;
+        hold(ax2, 'on'); grid(ax2, 'on'); axis(ax2, 'equal');
+        title(ax2, 'Element Stiffness (Axial, Shear, Rotational)');
+        xlabel(ax2, 'X Position (m)'); ylabel(ax2, 'Y Position (m)');
+    
+        h_ax  = plot(ax2, nan, nan, '-', 'Color', axial_color, 'LineWidth', 3, 'DisplayName', 'Axial (Line Width)');
+        h_sh  = scatter(ax2, nan, nan, 70, 'd', 'filled', 'MarkerFaceColor', shear_color, 'DisplayName', 'Shear (Diamond)');
+        h_rot = scatter(ax2, nan, nan, 100, 'o', 'MarkerEdgeColor', rot_color, 'LineWidth', 1.5, 'DisplayName', 'Rotational (Ring)');
+    
+        stiff_labels = strings(1, num_elements);
+        stiff_colors = cell(1, num_elements);
+    
+        for i = 1:num_elements
+            el = fem.get_element(elements, i);
+            n1 = nodes(node_ids == el.nodes(1));
+            n2 = nodes(node_ids == el.nodes(2));
+    
+            line_style = '-';
+            if el.type == "spring", line_style = '--'; end
+    
+            plot(ax2, [n1.x, n2.x], [n1.y, n2.y], line_style, 'Color', axial_color, 'LineWidth', ax_widths(i), 'HandleVisibility', 'off');
+            if k_sh(i) > 0
+                scatter(ax2, el_xm(i), el_ym(i), sh_sizes(i), 'd', 'filled', ...
+                    'MarkerFaceColor', shear_color, 'MarkerFaceAlpha', 0.75, 'HandleVisibility', 'off');
+            end
+            if k_rot(i) > 0
+                scatter(ax2, el_xm(i), el_ym(i), rot_sizes(i), 'o', ...
+                    'MarkerEdgeColor', rot_color, 'LineWidth', 1.5, 'HandleVisibility', 'off');
+            end
+    
+            stiff_labels(i) = sprintf('%s\nAx: %.1e | Sh: %.1e\nRot: %.1e', el.id, k_ax(i), k_sh(i), k_rot(i));
+            stiff_colors{i} = grey_color;
+        end
+    
+        for i = 1:num_nodes
+            scatter(ax2, nodes(i).x, nodes(i).y, 40, 'filled', 'MarkerFaceColor', royal_blue, 'HandleVisibility', 'off');
+        end
+    
+        draw_callout_labels(ax2, el_xm, el_ym, stiff_labels, stiff_colors, bbox);
+        legend(ax2, [h_ax, h_sh, h_rot], 'Location', 'southoutside', 'Orientation', 'horizontal', 'FontSize', 9);
+        hold(ax2, 'off');
+    
+        %% Figure 3: Nodal & Element Mass Mapping
+        figure('Name', 'FEM - Nodal & Element Mass', 'Position', [150, 40, fig_w, fig_h]);
+        ax3 = axes;
+        hold(ax3, 'on'); grid(ax3, 'on'); axis(ax3, 'equal');
+        title(ax3, 'Nodal & Element Mass Distribution');
+        xlabel(ax3, 'X Position (m)'); ylabel(ax3, 'Y Position (m)');
+    
+        h_nm = scatter(ax3, nan, nan, 90, 'o', 'filled', 'MarkerFaceColor', mass_color, 'MarkerFaceAlpha', 0.6, 'DisplayName', 'Nodal Mass+Inertia');
+        h_em = scatter(ax3, nan, nan, 70, 's', 'filled', 'MarkerFaceColor', el_mass_color, 'MarkerFaceAlpha', 0.7, 'DisplayName', 'Element Mass');
+    
+        mass_labels = strings(1, num_elements + num_nodes);
+        mass_colors = cell(1, num_elements + num_nodes);
+    
+        for i = 1:num_elements
+            el = fem.get_element(elements, i);
+            n1 = nodes(node_ids == el.nodes(1));
+            n2 = nodes(node_ids == el.nodes(2));
+    
+            if m_el(i) > 0
+                plot(ax3, [n1.x, n2.x], [n1.y, n2.y], '-', 'Color', el_mass_color, 'LineWidth', m_el_width(i), 'HandleVisibility', 'off');
+                scatter(ax3, el_xm(i), el_ym(i), m_el_sizes(i), 's', 'filled', ...
+                    'MarkerFaceColor', el_mass_color, 'MarkerFaceAlpha', 0.7, 'HandleVisibility', 'off');
+                mass_colors{i} = el_mass_color;
             else
-                plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', stiffness_color, 'LineWidth', widths(i));
+                plot(ax3, [n1.x, n2.x], [n1.y, n2.y], '--', 'Color', grey_color, 'LineWidth', 1.0, 'HandleVisibility', 'off');
+                mass_colors{i} = grey_color;
+            end
+            mass_labels(i) = sprintf('%s\nm_el: %.2f kg', el.id, m_el(i));
+        end
+    
+        m_mags = arrayfun(@(n) n.mass + n.inertia, nodes);
+        node_sizes = scale_visual(m_mags, 30, 300, false);
+    
+        for i = 1:num_nodes
+            scatter(ax3, nodes(i).x, nodes(i).y, node_sizes(i), 'filled', ...
+                'MarkerFaceColor', mass_color, 'MarkerFaceAlpha', 0.6, 'HandleVisibility', 'off');
+            scatter(ax3, nodes(i).x, nodes(i).y, 30, 'filled', ...
+                'MarkerFaceColor', royal_blue, 'HandleVisibility', 'off');
+    
+            idx = num_elements + i;
+            mass_labels(idx) = sprintf('%s\nM: %.1f kg | I: %.1f', nodes(i).id, nodes(i).mass, nodes(i).inertia);
+            mass_colors{idx} = royal_blue;
+        end
+    
+        draw_callout_labels(ax3, [el_xm, node_x], [el_ym, node_y], mass_labels, mass_colors, bbox);
+        legend(ax3, [h_nm, h_em], 'Location', 'southoutside', 'Orientation', 'horizontal', 'FontSize', 9);
+        hold(ax3, 'off');
+    end
+    
+    %% Local Helper: External Callout Labels with Leader Lines
+    function draw_callout_labels(ax, anchors_x, anchors_y, labels, colors, bbox)
+        % Places labels in sorted left/right columns outside the model bounding box
+        % with leader lines pointing back to each (anchor_x, anchor_y).
+        x_min = bbox(1); x_max = bbox(2);
+        y_min = bbox(3); y_max = bbox(4);
+    
+        dx = max(x_max - x_min, 1e-3);
+        dy = max(y_max - y_min, 1e-3);
+        x_mid = 0.5 * (x_min + x_max);
+    
+        % Horizontal margin where text columns sit
+        margin_x = 0.25 * dx;
+        elbow_offset = 0.08 * dx;
+    
+        % Split into left and right groups
+        left_idx  = find(anchors_x < x_mid);
+        right_idx = find(anchors_x >= x_mid);
+    
+        % Helper to lay out one side
+        function place_side(idxs, is_left)
+            if isempty(idxs), return; end
+    
+            % Sort bottom-to-top by anchor Y to prevent leader-line crossings
+            [~, order] = sort(anchors_y(idxs));
+            idxs = idxs(order);
+            n = numel(idxs);
+    
+            % Spread labels evenly across expanded vertical range
+            y_pad = 0.15 * dy;
+            y_targets = linspace(y_min - y_pad, y_max + y_pad, max(n, 2));
+            if n == 1
+                y_targets = anchors_y(idxs(1));
+            end
+    
+            if is_left
+                x_text  = x_min - margin_x;
+                x_elbow = x_text + elbow_offset;
+                h_align = 'right';
+            else
+                x_text  = x_max + margin_x;
+                x_elbow = x_text - elbow_offset;
+                h_align = 'left';
+            end
+    
+            for k = 1:n
+                idx = idxs(k);
+                ax_x = anchors_x(idx);
+                ax_y = anchors_y(idx);
+                ty   = y_targets(k);
+    
+                % Leader line: anchor -> elbow -> text
+                plot(ax, [ax_x, x_elbow, x_text], [ax_y, ty, ty], '-', ...
+                    'Color', [0.6, 0.6, 0.6, 0.7], 'LineWidth', 0.8, 'HandleVisibility', 'off');
+    
+                % Small anchor dot
+                plot(ax, ax_x, ax_y, '.', 'Color', colors{idx}, 'MarkerSize', 6, 'HandleVisibility', 'off');
+    
+                % External label
+                text(ax, x_text, ty, " " + labels(idx) + " ", ...
+                    'FontSize', 7.5, 'Color', colors{idx}, ...
+                    'HorizontalAlignment', h_align, 'VerticalAlignment', 'middle', ...
+                    'Interpreter', 'none');
             end
         end
-        
-        for i = 1:length(nodes)
-            scatter(nodes(i).x, nodes(i).y, 50, 'filled', 'MarkerFaceColor', royal_blue);
-        end
-        hold off;
-        
-        %% Plot 3: Mass Mapping
-        subplot(1, 3, 3);
-        hold on; grid on; axis equal;
-        title('Relative Nodal Mass & Inertia');
-        xlabel('X Position (m)'); ylabel('Y Position (m)');
-        
-        for i = 1:num_elements
-            el = fem.get_element(elements, i);
-            n1 = nodes(node_ids == el.nodes(1));
-            n2 = nodes(node_ids == el.nodes(2));
-            plot([n1.x, n2.x], [n1.y, n2.y], '-', 'Color', mass_color);
-        end
-        
-        m_mags = arrayfun(@(n) n.mass + n.inertia, nodes);
-        m_min = min(m_mags); m_max = max(m_mags);
-        
-        if m_max == m_min
-            sizes = ones(1, length(nodes)) * 100;
-        else
-            sizes = 30 + 270 * (m_mags - m_min) / (m_max - m_min);
-        end
-        
-        for i = 1:length(nodes)
-            scatter(nodes(i).x, nodes(i).y, sizes(i), 'filled', 'MarkerFaceColor', mass_color, 'MarkerFaceAlpha', 0.6);
-        end
-        
-        for i = 1:length(nodes)
-            scatter(nodes(i).x, nodes(i).y, 30, 'filled', 'MarkerFaceColor', royal_blue);
-            text(nodes(i).x, nodes(i).y, sprintf('  M:%.1f, I:%.1f', nodes(i).mass, nodes(i).inertia), 'FontSize', 8);
-        end
-        hold off;
+    
+        place_side(left_idx, true);
+        place_side(right_idx, false);
+    
+        % Expand axis limits so external text columns are never clipped
+        xlim(ax, [x_min - 0.85 * dx, x_max + 0.85 * dx]);
+        ylim(ax, [y_min - 0.25 * dy, y_max + 0.25 * dy]);
     end
 
         % ===============================================================================
@@ -495,4 +637,96 @@ classdef viz
 
     end
     
+end
+
+% === Local Functions ===
+% ===============================================================================
+function draw_callout_labels(ax, anchors_x, anchors_y, labels, colors, bbox)
+    % Places labels in sorted left/right columns outside the model bounding box
+    % with leader lines pointing back to each (anchor_x, anchor_y).
+    x_min = bbox(1); x_max = bbox(2);
+    y_min = bbox(3); y_max = bbox(4);
+    
+    dx = max(x_max - x_min, 1e-3);
+    dy = max(y_max - y_min, 1e-3);
+    x_mid = 0.5 * (x_min + x_max);
+    
+    % Horizontal margin where text columns sit
+    margin_x = 0.25 * dx;
+    elbow_offset = 0.08 * dx;
+    
+    % Split into left and right groups
+    left_idx  = find(anchors_x < x_mid);
+    right_idx = find(anchors_x >= x_mid);
+    
+    % Helper to lay out one side
+        function place_side(idxs, is_left)
+            if isempty(idxs), return; end
+    
+            % Sort bottom-to-top by anchor Y to prevent leader-line crossings
+            [~, order] = sort(anchors_y(idxs));
+            idxs = idxs(order);
+            n = numel(idxs);
+    
+            % Spread labels evenly across expanded vertical range
+            y_pad = 0.15 * dy;
+            y_targets = linspace(y_min - y_pad, y_max + y_pad, max(n, 2));
+            if n == 1
+                y_targets = anchors_y(idxs(1));
+            end
+    
+            if is_left
+                x_text  = x_min - margin_x;
+                x_elbow = x_text + elbow_offset;
+                h_align = 'right';
+            else
+                x_text  = x_max + margin_x;
+                x_elbow = x_text - elbow_offset;
+                h_align = 'left';
+            end
+    
+            for k = 1:n
+                idx = idxs(k);
+                ax_x = anchors_x(idx);
+                ax_y = anchors_y(idx);
+                ty   = y_targets(k);
+    
+                % Leader line: anchor -> elbow -> text
+                plot(ax, [ax_x, x_elbow, x_text], [ax_y, ty, ty], '-', ...
+                    'Color', [0.6, 0.6, 0.6, 0.7], 'LineWidth', 0.8, 'HandleVisibility', 'off');
+    
+                % Small anchor dot
+                plot(ax, ax_x, ax_y, '.', 'Color', colors{idx}, 'MarkerSize', 6, 'HandleVisibility', 'off');
+    
+                % External label
+                text(ax, x_text, ty, " " + labels(idx) + " ", ...
+                    'FontSize', 7.5, 'Color', colors{idx}, ...
+                    'HorizontalAlignment', h_align, 'VerticalAlignment', 'middle', ...
+                    'Interpreter', 'none');
+            end
+        end
+    
+    place_side(left_idx, true);
+    place_side(right_idx, false);
+    
+    % Expand axis limits so external text columns are never clipped
+    xlim(ax, [x_min - 0.85 * dx, x_max + 0.85 * dx]);
+    ylim(ax, [y_min - 0.25 * dy, y_max + 0.25 * dy]);
+end
+
+%% Local Helper: Visual Scaling
+function scaled = scale_visual(vals, min_out, max_out, use_log)
+    scaled = ones(size(vals)) * min_out;
+    pos_mask = vals > 0;
+    if ~any(pos_mask), return; end
+    
+    v = vals(pos_mask);
+    if use_log, v = log10(v); end
+    
+    v_min = min(v); v_max = max(v);
+    if v_max == v_min
+        scaled(pos_mask) = 0.5 * (min_out + max_out);
+    else
+        scaled(pos_mask) = min_out + (max_out - min_out) * (v - v_min) / (v_max - v_min);
+    end
 end

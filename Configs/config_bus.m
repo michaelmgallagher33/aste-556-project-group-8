@@ -32,7 +32,7 @@ function struct_out = config_bus()
     %                  singular matrices on pin joints).
     
     % Nodes: Bus
-    %  Bus Total Target Mass: ~3000 kg. 
+    %  Bus Total Target Mass: ~5000 kg. 
     %  The mass is distributed between the node point masses and the beam elements.
     %  Using 500 kg per bus node (2500 kg total) + structural beam mass (~1620 kg).
     m_bus_node = 500; I_bus_node = 160;
@@ -65,7 +65,7 @@ function struct_out = config_bus()
     % Nodes: Reaction Wheel Assemblies (RWAs)
     % A typical large RWA weighs around 15 kg with low rotational inertia 
     % relative to the bus.
-    m_rwa_node = 15; I_rwa_node = 0.5 * 15 * 0.2^2; % (Shape Factor) x (Mass) x (Radius)^2
+    m_rwa_node = 10; I_rwa_node = 0.5 * m_rwa_node * 0.2^2; % (Shape Factor) x (Mass) x (Radius)^2
     struct_out.nodes(6) = struct(...
         'id', "RWA Left", ...
         'x', -2, 'y', 1, ...
@@ -79,9 +79,9 @@ function struct_out = config_bus()
     
     % Nodes: Solar Array Wing Assemblies (SAWAs)
     % Solar arrays have distributed mass but represent a significant portion
-    % of the vehicle mass (e.g., 50 kg per wing distributed across two nodes).
+    % of the vehicle mass.
     % They have high rotational inertia due to their extended panel shapes.
-    m_sawa_node = 25; I_sawa_node = 15;
+    m_sawa_node = 0; I_sawa_node = 0;
     struct_out.nodes(8) = struct(...
         'id', "SAWA Left Mid", ...
         'x', -5.5, 'y', 0, ...
@@ -130,12 +130,11 @@ function struct_out = config_bus()
     %                  also fall back to struct_out.z.
     
     % Elements: Bus
-    % Made highly rigid. Modeled loosely as thick Aluminum (E = 70 GPa).
-    % I = 0.1 m^4 and A = 0.05 m^2 represent a stiff, heavy cross-section 
-    % (e.g., a heavily reinforced truss or thick-walled box structure).
-    % rho_bus = Area * 2700 kg/m^3 (Al density) = 135 kg/m.
+    % Made highly rigid. Modeled as a solid beam made of Aluminum 
+    % (E = 70 GPa, rho = 2700 kg/m^3).
     % Goal: 30-35 Hz
-    E_bus = 70e9; I_bus = 0.1; A_bus = 0.05; rho_bus = 135;
+    E_bus = 70e9; base_bus = 0.2; height_bus = 0.2; rho_Al = 2700;
+    A_bus = base_bus*height_bus; I_bus = 0.5*base_bus*height_bus^3; rho_bus = rho_Al*A_bus;
     struct_out.elements{1} = struct(...
         'id', "Bus Base", 'type', "beam", ...
         'nodes', ["Bus Bottom Left", "Bus Bottom Middle"], ... 
@@ -187,10 +186,12 @@ function struct_out = config_bus()
     % Elements: SAWA Structures
     % Solar arrays are significantly less rigid than the bus. 
     % We use Aluminum (E=70e9) but drop the Area and Area Moment of Inertia 
-    % dramatically to represent flat composite panels.
-    % rho_sawa = Area * 2700 kg/m^3 = 2.7 kg/m. Note: Go softer on
-    % stiffness and decrease mass. 1-2 Hz
-    E_sawa = 70e9; I_sawa = 1e-4; A_sawa = 1e-3; rho_sawa = 2.7;
+    % dramatically to represent flat honeycomb panels.
+    E_sawa = 70e9; base_sawa = 2; thickness_face_sawa = 0.005; height_sawa = 0.025; 
+    height_core_sawa = height_sawa - 2*thickness_face_sawa; rho_core = 50; 
+    A_sawa = 2*base_sawa*thickness_face_sawa; 
+    I_sawa = base_sawa*(height_sawa^(3)-height_core_sawa^(3))/12; 
+    rho_sawa = rho_Al * A_sawa + rho_core * base_sawa * height_core_sawa;
     struct_out.elements{8} = struct( ...
         'id', "SAWA Left Inner", 'type', "beam", ...
         'nodes', ["Bus Bottom Left", "SAWA Left Mid"], ...
