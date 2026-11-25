@@ -906,6 +906,150 @@ classdef fem
             rms_error = sqrt(variance);
         end
 
+        function [X_rms, X] = numeric_sim(model, options, x0)
+        % NUMERIC_SIM Numerically simulates time-domain dynamic response on free DOFs
+        % using MATLAB's ode45 solver with an optional initial state vector.
+        %
+        % SYNTAX:
+        %   [X_rms, X] = fem.numeric_sim(model, options)
+        %   [X_rms, X] = fem.numeric_sim(model, options, x0)
+        %
+        % Optional Initial State (x0):
+        %   - Omitted or []   : All-zero initial displacements and velocities.
+        %   - [2*n_dof x 1]   : Full state vector [q; q_dot] (auto-reduced to free DOFs).
+        %   - [n_dof x 1]     : Full initial displacements [q] with zero initial velocity.
+        %   - [2*n_free x 1]  : Pre-reduced free-DOF state vector [q_f; q_f_dot].
+        %   - [n_free x 1]    : Pre-reduced free-DOF displacements [q_f] with zero velocity.
+        %
+        % Outputs [X_rms, X] match fem.calculate_rms and are directly compatible
+        % with viz.plot_rms and fem.calculate_optical_pointing_error.
+    
+            M = model.M;
+            K = model.K;
+            C = model.C;
+            mapping = model.mapping;
+    
+            t = options.t(:)';
+            if length(t) < 2
+                error('options.t must contain at least two time points.');
+            end
+    
+            n_dof = size(M, 1);
+    
+            if isfield(model, 'free_dofs') && ~isempty(model.free_dofs)
+                free_dofs = model.free_dofs;
+            else
+                free_dofs = (1:n_dof)';
+            end
+            n_f = length(free_dofs);
+    
+            % Parse and validate optional initial state x0
+            if nargin < 3 || isempty(x0)
+                y0 = zeros(2 * n_f, 1);
+            else
+                x0 = x0(:);
+                if length(x0) == 2 * n_dof
+                    y0 = [x0(free_dofs); x0(n_dof + free_dofs)];
+                elseif length(x0) == n_dof
+                    y0 = [x0(free_dofs); zeros(n_f, 1)];
+                elseif length(x0) == 2 * n_f
+                    y0 = x0;
+                elseif length(x0) == n_f
+                    y0 = [x0; zeros(n_f, 1)];
+                else
+                    error('Invalid initial state length (%d). Expected %d (2*n_dof), %d (n_dof), %d (2*n_free), or %d (n_free).', ...
+                        length(x0), 2*n_dof, n_dof, 2*n_f, n_f);
+                end
+            end
+    
+            % Build Full Force Matrix
+            F_matrix = zeros(n_dof, length(t));
+            if isfield(options, 'forces') && ~isempty(options.forces)
+                for i = 1:length(options.forces)
+                    f = options.forces(i);
+    
+                    node_idx = find([mapping.node_id] == f.node_id);
+                    if isempty(node_idx)
+                        error('Node ID %s not found in mapping.', f.node_id);
+                    end
+    
+                    node_dofs = mapping(node_idx).global_dofs;
+    
+                    if strcmpi(f.dof, 'x')
+                        g_dof = node_dofs(1);
+                    elseif strcmpi(f.dof, 'y')
+                        g_dof = node_dofs(2);
+                    elseif strcmpi(f.dof, 'theta')
+                        g_dof = node_dofs(3);
+                    else
+                        error('Invalid DOF type. Use ''x'', ''y'', or ''theta''.');
+                    end
+    
+                    F_matrix(g_dof, :) = F_matrix(g_dof, :) + f.profile(:)';
+                end
+            end
+    
+            % Reduce system matrices and forcing to free DOFs
+            M_f = M(free_dofs, free_dofs);
+            K_f = K(free_dofs, free_dofs);
+            C_f = C(free_dofs, free_dofs);
+            F_f = F_matrix(free_dofs, :);
+    
+            % State-space transition matrix A for y = [q_f; q_f_dot]
+            A = [zeros(n_f), eye(n_f);
+                 -M_f \ K_f, -M_f \ C_f];
+    
+            has_force = any(F_f(:) ~= 0);
+    
+            if has_force
+                % Precompute M_f \ F_f so the ODE function avoids repeated linear solves
+                a_ext = M_f \ F_f;
+    
+                % Check for uniform time grid to enable fast O(1) linear interpolation
+                dt_vec = diff(t);
+                is_uniform = max(abs(dt_vec - dt_vec(1))) <= 1e-9 * max(1, abs(dt_vec(1)));
+                t0 = t(1);
+                dt = dt_vec(1);
+                n_t = length(t);
+                z_top = zeros(n_f, 1);
+    
+                ode_fun = @(tau, y) A * y + [z_top; get_accel_forcing(tau)];
+            else
+                ode_fun = @(tau, y) A * y;
+            end
+    
+            function a_t = get_accel_forcing(tau)
+                if is_uniform
+                    idx_f = (tau - t0) / dt + 1;
+                    if idx_f <= 1
+                        a_t = a_ext(:, 1);
+                    elseif idx_f >= n_t
+                        a_t = a_ext(:, n_t);
+                    else
+                        i0 = floor(idx_f);
+                        frac = idx_f - i0;
+                        a_t = a_ext(:, i0) + frac * (a_ext(:, i0 + 1) - a_ext(:, i0));
+                    end
+                else
+                    a_t = interp1(t, a_ext', tau, 'linear', 0)';
+                end
+            end
+    
+            % Numerically integrate over options.t using ode45
+            opts = odeset('RelTol',1e-6,'AbsTol',1e-9);
+            [~, Y_f] = ode45(ode_fun, t, y0, opts);
+    
+            % Extract free-DOF displacements and expand to full DOF space
+            X_f = Y_f(:, 1:n_f)';
+            X = zeros(n_dof, size(X_f, 2));
+            X(free_dofs, :) = X_f;
+    
+            % Calculate RMS response
+            X_rms = sqrt(mean(X.^2, 2));
+        end
+    
+        % ===============================================================================
+
     end
     
 end
