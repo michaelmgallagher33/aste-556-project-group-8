@@ -1,8 +1,6 @@
 %% ASTE 556 - Group 8 project: Space-Telescope Structural Analysis
 %% Isolator + Optical Bench (Iso + Obench)
-clear; close all; clc;
-
-function struct_out = config_Iso_Obench()
+function struct_out = comfig_Iso_Obench()
     % CONFIG_FEM_TEMPLATE Generates a FEM structural template.
     %
     % This function outputs a struct formatted for the 'fem' class methods.
@@ -27,9 +25,70 @@ function struct_out = config_Iso_Obench()
     %  - k_rot       : [Double] Rotational stiffness in N*m/rad. Used to ground 
     %                  rotational DOFs (e.g., modeling an ACS or preventing 
     %                  singular matrices on pin joints).
-    
+     
+% ==========================================================================
+% Material Library 
+% ==========================================================================
+% E: Young's modulus along the member axis [Pa]
+% rho: Volumetric density [kg/m^3]
+
+% High-modulus carbon/epoxy fabric, 0/90 layup [ACP]: E1 = 85 Gpa (85e9), 1.6 g/cc (rho= 1600) 
+
+% Standard-modulus carbon/epoxy fabric, 0/90 [ACP] = E1 = 70 Gpa (70e9), 1.6  g/cc (rho = 1600) 
+
+% Unidirectional HM carbon/epoxy [ACP]: E1 = 175 Gpa (175e9), 1.6 g/cc (rho = 1600)
+% (stiffness option for posts if fibers run along the tube axis) 
+
+% E-glass/epoxy fabric, 0/90 [ACP]: E1 = 25 GPa (25e9), 1.9 g/cc (rho = 1900)
+
+% E-glass/epoxy fabric UD [ACP]: E1 = 40 GPa (40e9), 1.9 g/cc (rho = 1900)
+
+% 5052 aluminum honeycomb core, 3/16-5052-3.1 [Hex]
+% 3.1 lb/ft^3 * 16.0185 = 49.7 kg/m^3
+% E = 0; a honeycomb core carries almost no axialbending stress in a sandwich; the face sheets do
+    % ( its shear stiffness matters for sandwich shear deflection, which an Euler-Bernoulli beam element ignoes) 
+
+% Primary mirror substrate: E = NaN, density (rho)  = 1850 kg/mm^3 
+
+% ==========================================================================
+% Optical Bench (PSS): Hollow rectangular Sandwich Box
+% ==========================================================================
+
 % Nodes: Optical bench: Obench
-m_Obench_node = 1; I_Obench_node = 1;
+% 12 m long, 1 m deep, bottom face above 1.5 m above bus 
+
+% Material: carbon fabric skins with 5052 aluminum honeycomb 
+% Area: A = B*H - (B-2t)*(H-2t)
+    % t_face = skin thickness, main stiff and mass knob 
+    % t_core = honeycomb thickness, set how far apart the skins are 
+    % B = out-of-plane width, assume 1 m to match mirror depth 
+%Bending Inertia: I = [B*H^3-(B-2t)(H-2t)^3]/12
+% nsm: non-strutcural mass per length (adhesive, inserts, harness) 0 kg/m (assumed) 
+
+E_Obench = 85e9; %[Pa], given from HMCF, Al honeycomb ignored
+
+B = 1.0; %[m], base length of Obench
+H = 1.0; %[m] height of Obench
+t_face = 1.5e-3; %[m], wall/skin thickness of composite material
+t_core = 25e-3; %[m], wall thickness of Al honeycomb
+
+A_Obench_face = B*H - (B-2*t_face)*(H-2*t_face); %[m^2], area of composite
+A_Obench_core = B*H - (B-2*t_core)*(H-2*t_core); %[m^2], area of honeycomb
+A_Obench_total = A_Obench_face + A_Obench_core; %[m^2], total area (composite + honeycomb) 
+
+I_Obench_face =(B*H^3 - (B-2*t_face)*(H-2*t_face)^3)/12; % moment of inertia of composite
+I_Obench_core =(B*H^3 - (B-2*t_core)*(H-2*t_core)^3)/12; % momennt of inertia for honeycomb 
+I_Obench_total = I_Obench_face + I_Obench_core; % total momennt of inertia (composite + honeycomb) 
+
+rho_Obench_face = 1600; %[kg/m^2], material density of composite
+rho_Obench_core = 49.7; %[kg/m^2], material density of honeycomb
+rho_Obench_total = rho_Obench_face + rho_Obench_core; %[kg/m^2] total material denstity (composite + honeycomb)
+
+n_Obench = 7; % number of nodes in Obench section 
+m_Obench_node = (A_Obench_total * rho_Obench_total)/n_Obench; %[kg], mass per node
+
+I_Obench_node = I_Obench_total/n_Obench; % Inertia per node
+
     struct_out.nodes(1) = struct(...
         'id', "Obench Far left", ...
         'x', -5, 'y', 4.5, ...
@@ -72,8 +131,34 @@ m_Obench_node = 1; I_Obench_node = 1;
         'mass', m_Obench_node, 'inertia', I_Obench_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0);
 
+% ==========================================================================
+% Primary Mirror and Camera Posts: Graphite (carbon) composite hollow tubes
+% ==========================================================================
 % Nodes: Primary Mirrors: PM
-m_PM_node = 1; I_PM_node = 1;
+% Post length is set by geometry: H/2 (inside bench) + hieght above the top face
+%5 cm thick, 1.5 m long, 1 m deep
+
+% Material: Standard Modulus carbon/epoxy fabbric (SMCF)
+% Area: pi*(D^2 - d^2)/4 
+% Inertia: I = pi*(D^4 - d^4)/64
+    % d = D - 2t
+
+E_PM = 70e9; %[Pa], given by SMCF
+
+D_PM_post = 0.3; %[m], outer post diamter (raise to stiffen post)
+t_post = 5e-3; %[m], wall thickness of post
+d_PM_post = D_PM_post - 2*t_post; % [m}, inner diameter of post 
+
+A_PM = pi*((D_PM_post)^2 - (d_PM_post)^2)/4; % [m^2], area of PM post
+
+I_PM = pi*((D_PM_post)^4 - (d_PM_post)^4)/64; % moment of inertia of PM post
+rho_PM = 1900; %[kg/m^2], material densiy of SMCF composite
+
+n_PM = 4; % number of nodes in PM section
+m_PM_node = (A_PM * rho_PM)/n_PM; % mass per node 
+
+I_PM_node = I_PM/n_PM; % Inertia per node 
+
     struct_out.nodes(8) = struct(...
         'id', "PM Left Tip", ...
         'x', -3, 'y', 6, ...
@@ -99,41 +184,89 @@ m_PM_node = 1; I_PM_node = 1;
         'constraints', [0, 0, 0], 'k_rot', 0);
 
 % Nodes: Camera: Cam
-m_Cam_node = 1; I_Cam_node = 1;
+% Camera post diameter: 0.15 m 
+% Camera wall thickness: 3e-3 m 
+
+% Material: Standard Modulus carbon/epoxy fabbric (SMCF)
+% Area: pi*(D^2 - d^2)/4 
+% Inertia: I = pi*(D^4 - d^4)/64
+    % d = D - 2t
+
+E_Cam = 70e9; %[Pa], given by SMCF
+
+D_Cam_post = 0.15; %[m], outer diameter of post
+t_Cam = 3e-3; %[m], wall thickness of post
+d_Cam_post = D_Cam_post - 2*t_Cam; %[m], inner diamter of post 
+A_Cam = pi*((D_Cam_post)^2 - d_Cam_post^2)/4; %[m^2], area of Cam post 
+
+I_Cam = pi*((D_Cam_post)^4 - d_Cam_post^4)/64; % moment of inertia of Cam post 
+
+rho_Cam = 1900; %[kg/m^2], material density of SMCF
+
+n_Cam = 1; % number of nodes in Cam section
+m_Cam_node = (A_Cam * rho_Cam)/n_Cam; % mass per node
+
+I_Cam_node = I_Cam/n_Cam; % inertia per node
+
     struct_out.nodes(12) = struct(...
         'id', "Camera Tip", ...
         'x', 0, 'y', 5, ...
         'mass', m_Cam_node, 'inertia', I_Cam_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0);
-      
+
+% ==========================================================================
+% Isolator Legs: Fiberglass (E-glass/epoxy) hollow tubes
+% ==========================================================================
+
 % Nodes: Isolators: Iso 
-m_iso_node = 1; I_iso_node = 1; 
+% Axial stiffness per leg k_a = E*A/L_leg sets the translation/bounce 
+    % with two legs at 45degrees, the vertical stiffness also comes out to k_a
+% Bounce frequency: f = sqrt(k_a/m)/2*pi
+
+
+% Material: E-glass fabric fabric 
+% Iso leg diameter: D = 0.05 m 9outer diameter) 
+% Iso wall thickness: t = 1.0e-3 m (wall thickness) ( main frequency knob (A ~ pi*D*t))
+% Goal: 4-8 Hz
+
+E_Iso = 25e9; %[Pa], from Eglass fabric
+
+D_Iso = 0.05; %[m], leg diameter of Iso 
+t_Iso = 1e-3; %[m], wall thickness of Iso 
+A_Iso = pi*D_Iso*t_Iso; %[m^2], area of Iso
+
+I_Iso = pi*(D_Iso)^4/64; % Iso moment of inertia of Iso 
+
+rho_Iso = 2700; %[kg/m^2] material density oof Eglass
+
+n_Iso = 4; % number of nodes in Isolator section
+m_Iso_node = (A_Iso * rho_Iso)/n_Iso; % mass per node 
+
+I_Iso_node = I_Iso/n_Iso; % inertia per node
+
  struct_out.nodes(13) = struct(...
         'id', "Iso Beam Bottom Left", ...
         'x', -3, 'y', 3, ...
-        'mass', m_iso_node, 'inertia', I_so_node, ...
+        'mass', m_Iso_node, 'inertia', I_Iso_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0); 
 
     struct_out.nodes(14) = struct(...
         'id', "Iso Beam Middle Left", ...
-        'x', -2.75, 'y', 3.75, ...
-        'mass', m_iso_node, 'inertia', I_iso_node, ...
+        'x', -2.25, 'y', 3.75, ...
+        'mass', m_Iso_node, 'inertia', I_Iso_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0); 
 
     struct_out.nodes(15) = struct(...
         'id', "Iso Beam Middle Right", ...
-        'x', 2.75, 'y', 3.75, ...
-        'mass', m_iso_node, 'inertia', I_iso_node, ...
+        'x', 2.25, 'y', 3.75, ...
+        'mass', m_Iso_node, 'inertia', I_Iso_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0); 
 
     struct_out.nodes(16) = struct(...
         'id', "Iso Beam Bottom Right", ...
         'x', 3, 'y', 3, ...
-        'mass', m_iso_node, 'inertia', I_iso_node, ...
+        'mass', m_Iso_node, 'inertia', I_Iso_node, ...
         'constraints', [0, 0, 0], 'k_rot', 0); 
-
-% nodes 13 and 15 might be repeats of nodes 2 and 4 of the bus, not sure if
-% I keep or remove
 
     %% =====================================================================
     %  ELEMENT DEFINITIONS
@@ -152,45 +285,43 @@ m_iso_node = 1; I_iso_node = 1;
     %                  elements, ignored if type == "beam").
 
 % Elements: Optical Bench: Obench
-   E_Obench = 70e9; I_Obench = 0.09; A_Obench = 20; rho_Obench = 2700;
     struct_out.elements(1) = struct(...
         'id', "Obench Left", 'type', "beam", ...
         'nodes', ["Obench Far left", "Obench PM base left"], ... 
-        'E', E_Obench, 'I', I_Obench, 'A', A_Obench, ...
-        'rho', rho_Obench, 'k_discrete', 0);
+        'E', E_Obench, 'I', I_Obench_total, 'A', A_Obench_total, ...
+        'rho', rho_Obench_total, 'k_discrete', 0);
 
     struct_out.elements(2) = struct(...
         'id', "Obench Middle Left", 'type', "beam", ...
         'nodes', ["Obench PM base left", "Obench PM base Middle left"], ... 
-        'E', E_Obench, 'I', I_Obench, 'A', A_Obench, ...
-        'rho', rho_Obench, 'k_discrete', 0);
+        'E', E_Obench, 'I', I_Obench_total, 'A', A_Obench_total, ...
+        'rho', rho_Obench_total, 'k_discrete', 0);
 
     struct_out.elements(3) = struct(...
         'id', "Obench center left", 'type', "beam", ...
         'nodes', ["Obench PM base Middle left", "Obench Camera base"], ...
-        'E', E_Obench, 'I', I_Obench, 'A', A_Obench, ...
-        'rho', rho_Obench, 'k_discrete', 0);
+        'E', E_Obench, 'I', I_Obench_total, 'A', A_Obench_total, ...
+        'rho', rho_Obench_total, 'k_discrete', 0);
 
     struct_out.elements(4) = struct(...
         'id', "Obench Center Right", 'type', "beam", ...
         'nodes', ["Obench Camera base", "Obench PM base Middle Right"], ... 
-        'E', E_Obench, 'I', I_Obench, 'A', A_Obench, ...
-        'rho', rho_Obench, 'k_discrete', 0);
+        'E', E_Obench, 'I', I_Obench_total, 'A', A_Obench_total, ...
+        'rho', rho_Obench_total, 'k_discrete', 0);
     
     struct_out.elements(5) = struct(...
         'id', "Obench Middle Right", 'type', "beam", ...
         'nodes', ["Obench PM base Middle Right", "Obench PM Base Right"], ... 
-        'E', E_Obench, 'I', I_Obench, 'A', A_Obench, ...
-        'rho', rho_Obench, 'k_discrete', 0);
+        'E', E_Obench, 'I', I_Obench_total, 'A', A_Obench_total, ...
+        'rho', rho_Obench_total, 'k_discrete', 0);
 
     struct_out.elements(6) = struct(...
         'id', "Obench Right", 'type', "beam", ...
         'nodes', ["Obench PM Base Right", "Obench Far Right"], ... 
-        'E', E_Obench, 'I', I_Obench, 'A', A_Obench, ...
-        'rho', rho_Obench, 'k_discrete', 0);
+        'E', E_Obench, 'I', I_Obench_total, 'A', A_Obench_total, ...
+        'rho', rho_Obench_total, 'k_discrete', 0);
 
 % Elements: Primary Mirrors 
- E_PM = 70e9; I_PM = 0.07; A_PM = 0.375; rho_PM = 2700;
  struct_out.elements(7) = struct(...
         'id', "PM Left", 'type', "beam", ...
         'nodes', ["Obench PM base left", "PM Left Tip"], ... 
@@ -216,7 +347,6 @@ m_iso_node = 1; I_iso_node = 1;
         'rho', rho_PM, 'k_discrete', 0);
 
 % Elements: Camera
- E_Cam = 70e9; I_Cam = 0.001; A_Cam = 0.05; rho_Cam = 2700;
    struct_out.elements(11) = struct(...
         'id', "Camera", 'type', "beam", ...
         'nodes', ["Obench Camera base", "Camera Tip"], ... 
@@ -224,7 +354,6 @@ m_iso_node = 1; I_iso_node = 1;
         'rho', rho_Cam, 'k_discrete', 0);
 
 % Elements: Ioslator: Iso 
- E_Iso = 70e9; I_Iso = 0.09; A_Iso = 0.75; rho_Iso = 2700;
     struct_out.elements(12) = struct( ...
         'id', "Iso Bottom Left", 'type', "beam", ...
         'nodes', ["Iso Beam Bottom Left", "Iso Beam Middle Left"], ...
