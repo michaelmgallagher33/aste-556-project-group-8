@@ -26,11 +26,7 @@ function struct_out = config_Payload()
     %                  singular matrices on pin joints).
     
     % Nodes for Secondary Mirror Boom: SecMirBm
-    % 1900 kg/m^3 density for Carbon fiber 
-    % 0.08532 m^3 total volume for hollow tubes
-    % Secondary Mirror Boom Weight Calulated to be 162.116 kg (162.116/8=20.26)
-    % Total inertia Cal'd at 6.42012 kg-m^2 (6.42/8=0.80251)
-    m_SecMirBm_node = 20.26; I_SecMirBm_node = 0.80251;
+    m_SecMirBm_node = 0; I_SecMirBm_node = 0;
        struct_out.nodes(1) = struct(...
         'id', "SecMirBm Bot. Left", ...
         'x', -5, 'y', 4.5, ...
@@ -88,8 +84,9 @@ function struct_out = config_Payload()
         'k_rot', 0); 
 
     % Node for Secondary Mirror: SecMir
-    % Leaving variables as is just in case things change
-    m_SecMir_node = 20.26 ; I_SecMir_node = 0.80251;
+    % Mass for secondary mirror set to 8 kg for testing
+    % Intertia found by using plate equation (w = .5m, h = .5m)
+    m_SecMir_node = 8 ; I_SecMir_node = 0.3333;
        struct_out.nodes(8) = struct(...
         'id', "SecondaryMirror", ...
         'x', 0, 'y', 17, ...
@@ -115,6 +112,11 @@ function struct_out = config_Payload()
     %  - rho         : [Double] Mass density per unit length in kg/m.
     %  - k_spring    : [1x3 Array] Local stiffness for spring elements [N/m, N/m, N*m/rad].
     %                  Format: [k_axial, k_shear, k_torsion].
+
+    % 1900 kg/m^3 density for Carbon fiber 
+    % 0.08532 m^3 total volume for hollow tubes
+    % Secondary Mirror Boom Weight Calulated to be 162.116 kg 
+    % Total inertia Cal'd at 6.42012 kg-m^2 
     
     % Elements: Secondary Mirror Boom: SecMirBm (SIDES)
     % Young's Modulus found for a high stiffness grade carbon fiber 
@@ -191,7 +193,7 @@ function struct_out = config_Payload()
     % Inertia cal'd here for the SecMir element ONLY given difference in length
     % All other properties stay consistent with side elements of boom
     % Leaving variables as is just in case things change
-    E_SecMir = E_SecMirBmsd; I_SecMir = 0.094; A_SecMir = A_SecMirBmsd; rho_SecMir = rho_SecMirBmsd;
+    E_SecMir = E_SecMirBmsd; I_SecMir = 0.18816; A_SecMir = A_SecMirBmsd; rho_SecMir = rho_SecMirBmsd;
     struct_out.elements(7) = struct(...
         'id', "Beam Left", ...
         'type', "beam", ...
